@@ -18,6 +18,7 @@ import { ChatMessage, type Citation } from "@/components/chat-message"
 import { ChatInput } from "@/components/chat-input"
 import { MetricsCard } from "@/components/metrics-card"
 import { apiAsk, apiAskStream, apiIngest, apiMetrics } from "@/lib/api"
+import { toast } from "sonner"
 
 interface Message {
   id: string
@@ -168,17 +169,43 @@ export default function PolicyHelper() {
   const handleIngestDocs = async () => {
     setIsIngesting(true)
     try {
-      await apiIngest()
+      const ingestResult = await apiIngest()
       const m = await apiMetrics()
       setMetrics(m)
+      if (ingestResult.indexed_docs === 0 && ingestResult.indexed_chunks === 0) {
+        toast.info("No new sample docs to ingest")
+      } else {
+        toast.success(
+          `Ingested ${ingestResult.indexed_docs} docs and ${ingestResult.indexed_chunks} chunks`,
+        )
+      }
+    } catch {
+      toast.error("Failed to ingest sample docs")
     } finally {
       setIsIngesting(false)
     }
   }
 
   const handleRefreshMetrics = async () => {
-    const m = await apiMetrics()
-    setMetrics(m)
+    try {
+      const m = await apiMetrics()
+      const noChange =
+        m.total_docs === metrics.total_docs &&
+        m.total_chunks === metrics.total_chunks &&
+        m.avg_retrieval_latency_ms === metrics.avg_retrieval_latency_ms &&
+        m.avg_generation_latency_ms === metrics.avg_generation_latency_ms &&
+        m.embedding_model === metrics.embedding_model &&
+        m.llm_model === metrics.llm_model
+
+      setMetrics(m)
+      if (noChange) {
+        toast.info("Metrics are already up to date")
+      } else {
+        toast.success("Metrics refreshed")
+      }
+    } catch {
+      toast.error("Failed to refresh metrics")
+    }
   }
 
   return (
