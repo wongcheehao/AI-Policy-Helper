@@ -5,7 +5,6 @@ from typing import List, Dict, Tuple, Iterator
 import numpy as np
 import logging
 from .constants import (
-    CITATION_BRACKET_FORMAT,
     DEFAULT_CONTEXT_PREVIEW_CHARS,
     DEFAULT_EMBED_DIM,
     LOCAL_EMBEDDING_MODEL_NAME,
@@ -14,6 +13,7 @@ from .constants import (
     QDRANT_SPARSE_VECTOR_NAME,
     QDRANT_TIMEOUT_S,
     SPARSE_HASH_DIM,
+    SOURCE_CITATION_MARKER,
     SYSTEM_PROMPT,
 )
 from .settings import settings
@@ -374,22 +374,31 @@ class CrossEncoderReranker:
 # ---- LLM provider ----
 class StubLLM:
     def generate(self, query: str, contexts: List[Dict]) -> str:
-        lines = ["Answer (stub):", "", "Sources:"]
-        for c in contexts:
+        refs: List[str] = []
+        sources: List[str] = []
+        for i, c in enumerate(contexts, start=1):
+            marker = SOURCE_CITATION_MARKER.format(n=i)
             title = c.get("title") or "Untitled"
             section = c.get("section") or "Section"
-            ref = CITATION_BRACKET_FORMAT.format(title=title, section=section)
-            lines.append(f"- {ref}")
+            refs.append(marker)
+            sources.append(f"- {marker} {title} — {section}")
 
-        lines.append("")
-        lines.append("Summary:")
-        # Naive summary of retrieved contexts for offline/demo mode.
         joined = " ".join([c.get("text", "") for c in contexts])
-        lines.append(
-            joined[:DEFAULT_CONTEXT_PREVIEW_CHARS]
-            + ("..." if len(joined) > DEFAULT_CONTEXT_PREVIEW_CHARS else "")
+        preview = joined[:DEFAULT_CONTEXT_PREVIEW_CHARS] + (
+            "..." if len(joined) > DEFAULT_CONTEXT_PREVIEW_CHARS else ""
         )
-        return "\n".join(lines)
+
+        return "\n".join(
+            [
+                "Answer (stub):",
+                "",
+                f"Relevant excerpts: {preview}",
+                (" " + " ".join(refs)) if refs else "",
+                "",
+                "Sources:",
+                *sources,
+            ]
+        ).strip()
 
     def generate_stream(self, query: str, contexts: List[Dict]) -> List[str]:
         """
@@ -423,15 +432,15 @@ class OpenRouterLLM:
         """
         sources_lines: List[str] = []
         for i, c in enumerate(contexts, start=1):
+            marker = SOURCE_CITATION_MARKER.format(n=i)
             title = c.get("title") or "Untitled"
             section = c.get("section") or "Section"
-            ref = CITATION_BRACKET_FORMAT.format(title=title, section=section)
             sources_lines.append(
                 "\n".join(
                     [
                         f"[{i}] {title}",
                         f"Section: {section}",
-                        f"Citation: {ref}",
+                        f"Cite as: {marker}",
                         c.get("text", "") or "",
                         "---",
                     ]

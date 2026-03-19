@@ -59,17 +59,20 @@ QDRANT_TIMEOUT_S = 10.0
 # citation bracket format: `[Source Title -- Section]`.
 
 # Inline citation format expected in the model's answer.
-CITATION_BRACKET_FORMAT = "[{title} -- {section}]"
+# We use a numeric marker so the UI can render clickable superscripts.
+SOURCE_CITATION_MARKER = "[^{n}]"
 
 # System prompt that instructs the model to answer only from sources and to use
 # the above citation format.
 SYSTEM_PROMPT = """You are a company policy assistant.
 
 Answer ONLY from the provided sources.
-When you use information from a source, include an inline citation in the form
-[{Source Title} -- {Section}].
+When you use information from a source, include an inline citation marker like
+[^1], [^2], ... where the number matches the source number in the Sources list.
 
-If the sources do not contain the answer, respond exactly with:
+Every non-trivial factual claim must have at least one citation marker.
+
+If the sources do not contain the answer, respond exactly with (and include NO citations):
 I don't have enough information to answer that.
 
 Be concise and factual. Do not invent or infer details not present in the sources.

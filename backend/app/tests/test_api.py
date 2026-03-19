@@ -1,4 +1,4 @@
-from app.constants import CITATION_BRACKET_FORMAT
+from app.constants import SOURCE_CITATION_MARKER
 from app.settings import settings
 import json
 
@@ -21,11 +21,7 @@ def test_ingest_and_ask(client):
     # grounding consistently even without a real model.
     if settings.llm_provider == "stub":
         assert "Sources:" in data["answer"]
-        first = data["citations"][0]
-        title = first.get("title")
-        section = first.get("section") or "Section"
-        expected_ref = CITATION_BRACKET_FORMAT.format(title=title, section=section)
-        assert expected_ref in data["answer"]
+        assert SOURCE_CITATION_MARKER.format(n=1) in data["answer"]
 
 
 def test_ask_stream_sse(client):

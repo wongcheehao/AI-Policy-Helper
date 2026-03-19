@@ -25,6 +25,46 @@ export interface ChatMessageProps {
   isStreaming?: boolean
 }
 
+function superscriptLabel(n: number): string {
+  // Use unicode superscripts so we can keep `skipHtml` enabled in ReactMarkdown.
+  const map: Record<string, string> = {
+    "0": "⁰",
+    "1": "¹",
+    "2": "²",
+    "3": "³",
+    "4": "⁴",
+    "5": "⁵",
+    "6": "⁶",
+    "7": "⁷",
+    "8": "⁸",
+    "9": "⁹",
+  }
+  return String(n)
+    .split("")
+    .map((d) => map[d] ?? d)
+    .join("")
+}
+
+function extractCitedSourceIds(content: string): Set<string> {
+  const ids = new Set<string>()
+  const re = /\[\^(\d+)\]/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(content)) !== null) {
+    ids.add(m[1])
+  }
+  return ids
+}
+
+function linkifyCitationMarkers(content: string): string {
+  // Transform `[^1]` into a markdown link that scrolls to the matching source row.
+  // We keep the label as a unicode superscript for the "small 1,2,3" look.
+  return content.replace(/\[\^(\d+)\]/g, (_full, n) => {
+    const num = Number(n)
+    const label = Number.isFinite(num) ? superscriptLabel(num) : String(n)
+    return `[${label}](#source-${n})`
+  })
+}
+
 const markdownComponents = {
   h1: ({ children, ...props }: any) => (
     <h1 className="text-base font-semibold mt-3 mb-2" {...props}>
@@ -77,10 +117,30 @@ const markdownComponents = {
       {children}
     </pre>
   ),
+  a: ({ children, ...props }: any) => (
+    <a
+      className="text-blue-600 hover:text-blue-700 visited:text-blue-700 underline underline-offset-2"
+      {...props}
+    >
+      {children}
+    </a>
+  ),
 }
 
 export function ChatMessage({ role, content, citations, isStreaming }: ChatMessageProps) {
-  const hasCitations = (citations?.length || 0) > 0
+  const allCitations = citations ?? []
+  const citedIds = role === "assistant" ? extractCitedSourceIds(content) : new Set<string>()
+  const isNoInfoAnswer =
+    role === "assistant" &&
+    content.trim().replace(/\s+/g, " ") === "I don't have enough information to answer that."
+  const visibleCitations =
+    isNoInfoAnswer
+      ? []
+      : role === "assistant" && citedIds.size > 0
+      ? allCitations.filter((c) => citedIds.has(c.id))
+      : allCitations
+  const hasCitations = visibleCitations.length > 0
+  const displayContent = role === "assistant" ? linkifyCitationMarkers(content) : content
 
   return (
     <div
@@ -105,7 +165,7 @@ export function ChatMessage({ role, content, citations, isStreaming }: ChatMessa
         <div className="text-foreground">
           {role === "assistant" ? (
             <ReactMarkdown skipHtml components={markdownComponents as any}>
-              {content}
+              {displayContent}
             </ReactMarkdown>
           ) : (
             <p className="text-sm leading-relaxed">{content}</p>
@@ -121,7 +181,7 @@ export function ChatMessage({ role, content, citations, isStreaming }: ChatMessa
               Sources
             </p>
             <div className="space-y-2">
-              {citations.map((citation) => (
+              {visibleCitations.map((citation) => (
                 <CitationRow key={citation.id} citation={citation} />
               ))}
             </div>
@@ -134,9 +194,11 @@ export function ChatMessage({ role, content, citations, isStreaming }: ChatMessa
 
 function CitationRow({ citation }: { citation: Citation }) {
   const [open, setOpen] = useState(false)
+  const anchorId = `source-${citation.id}`
 
   return (
-    <Collapsible open={open} onOpenChange={setOpen}>
+    <div id={anchorId} className="scroll-mt-24">
+      <Collapsible open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger asChild>
         <button
           type="button"
@@ -151,7 +213,9 @@ function CitationRow({ citation }: { citation: Citation }) {
         >
           <span className="flex items-center gap-2 min-w-0">
             <FileText className="w-4 h-4 text-primary flex-shrink-0" />
-            <span className="text-xs text-foreground truncate">{citation.title}</span>
+            <span className="text-xs text-foreground truncate">
+              {citation.id}. {citation.title}
+            </span>
           </span>
           <span className="flex items-center gap-2 flex-shrink-0">
             <span className="text-[11px] text-muted-foreground">
@@ -178,6 +242,7 @@ function CitationRow({ citation }: { citation: Citation }) {
           </div>
         </div>
       </CollapsibleContent>
-    </Collapsible>
+      </Collapsible>
+    </div>
   )
 }

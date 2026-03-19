@@ -3,6 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import StreamingResponse
 import json
 import logging
+import time
+import uuid
+import re
+from typing import List
 from .models import IngestResponse, AskRequest, AskResponse, MetricsResponse, Citation, Chunk
 from .settings import settings
 from .constants import DEFAULT_TOP_K
@@ -19,13 +23,64 @@ app = FastAPI(title="AI Policy & Product Helper")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 engine = RAGEngine()
+
+_CITATION_MARKER_RE = re.compile(r"\[\^(\d+)\]")
+_NO_INFO_ANSWER = "I don't have enough information to answer that."
+
+
+def _extract_cited_source_ids(answer: str) -> List[int]:
+    """
+    Extract 1-based numeric citation markers (e.g. [^1]) from an answer.
+    Returns unique ids in order of first appearance.
+    """
+    if not answer:
+        return []
+    seen = set()
+    out: List[int] = []
+    for m in _CITATION_MARKER_RE.finditer(answer):
+        try:
+            n = int(m.group(1))
+        except Exception:
+            continue
+        if n <= 0 or n in seen:
+            continue
+        seen.add(n)
+        out.append(n)
+    return out
+
+
+def _filter_ctx_by_citations(answer: str, ctx: List[dict]) -> List[dict]:
+    """
+    Make the backend authoritative about citations:
+    - If the model refuses with the exact refusal string, return no sources.
+    - Otherwise, return only ctx entries that were actually cited via [^n].
+    """
+    normalized = (answer or "").strip().replace("\n", " ")
+    normalized = " ".join(normalized.split())
+    if normalized == _NO_INFO_ANSWER:
+        return []
+
+    cited_ids = _extract_cited_source_ids(answer or "")
+    if not cited_ids:
+        return []
+
+    selected: List[dict] = []
+    for n in cited_ids:
+        i = n - 1
+        if 0 <= i < len(ctx):
+            selected.append(ctx[i])
+    return selected
+
 
 @app.get("/api/health")
 def health():
@@ -47,22 +102,45 @@ def ingest():
 
 @app.post("/api/ask", response_model=AskResponse)
 def ask(req: AskRequest):
-    logger.info("ask.start k=%s query_len=%s", req.k or DEFAULT_TOP_K, len(req.query or ""))
+    request_id = uuid.uuid4().hex[:10]
+    logger.info(
+        "ask.start id=%s k=%s query_len=%s",
+        request_id,
+        req.k or DEFAULT_TOP_K,
+        len(req.query or ""),
+    )
+    t_retrieval0 = time.time()
     ctx = engine.retrieve(req.query, k=req.k or DEFAULT_TOP_K)
-    logger.debug("ask.retrieved ctx=%s", len(ctx))
+    retrieval_ms = (time.time() - t_retrieval0) * 1000.0
+    logger.debug(
+        "ask.retrieved id=%s ctx=%s ms=%.2f sources=%s",
+        request_id,
+        len(ctx),
+        retrieval_ms,
+        [(c.get("title"), c.get("section")) for c in ctx],
+    )
+    t_gen0 = time.time()
     answer = engine.generate(req.query, ctx)
-    logger.info("ask.done ctx=%s answer_len=%s", len(ctx), len(answer or ""))
-    citations = [Citation(title=c.get("title"), section=c.get("section")) for c in ctx]
-    chunks = [Chunk(title=c.get("title"), section=c.get("section"), text=c.get("text")) for c in ctx]
-    stats = engine.stats()
+    generation_ms = (time.time() - t_gen0) * 1000.0
+    logger.info(
+        "ask.done id=%s ctx=%s answer_len=%s retrieval_ms=%.2f generation_ms=%.2f",
+        request_id,
+        len(ctx),
+        len(answer or ""),
+        retrieval_ms,
+        generation_ms,
+    )
+    cited_ctx = _filter_ctx_by_citations(answer, ctx)
+    citations = [Citation(title=c.get("title"), section=c.get("section")) for c in cited_ctx]
+    chunks = [Chunk(title=c.get("title"), section=c.get("section"), text=c.get("text")) for c in cited_ctx]
     return AskResponse(
         query=req.query,
         answer=answer,
         citations=citations,
         chunks=chunks,
         metrics={
-            "retrieval_ms": stats["avg_retrieval_latency_ms"],
-            "generation_ms": stats["avg_generation_latency_ms"],
+            "retrieval_ms": round(retrieval_ms, 2),
+            "generation_ms": round(generation_ms, 2),
         }
     )
 
@@ -76,15 +154,29 @@ def ask_stream(req: AskRequest):
     - event: chunk  (data: {"token": "..."}) repeatedly
     - event: done   (data: {"citations": [...], "chunks": [...], "metrics": {...}})
     """
-    logger.info("ask_stream.start k=%s query_len=%s", req.k or DEFAULT_TOP_K, len(req.query or ""))
+    request_id = uuid.uuid4().hex[:10]
+    logger.info(
+        "ask_stream.start id=%s k=%s query_len=%s",
+        request_id,
+        req.k or DEFAULT_TOP_K,
+        len(req.query or ""),
+    )
+    t_retrieval0 = time.time()
     ctx = engine.retrieve(req.query, k=req.k or DEFAULT_TOP_K)
-    logger.debug("ask_stream.retrieved ctx=%s", len(ctx))
-    citations = [Citation(title=c.get("title"), section=c.get("section")) for c in ctx]
-    chunks = [Chunk(title=c.get("title"), section=c.get("section"), text=c.get("text")) for c in ctx]
-
+    retrieval_ms = (time.time() - t_retrieval0) * 1000.0
+    logger.debug(
+        "ask_stream.retrieved id=%s ctx=%s ms=%.2f sources=%s",
+        request_id,
+        len(ctx),
+        retrieval_ms,
+        [(c.get("title"), c.get("section")) for c in ctx],
+    )
     def event_generator():
+        t_gen0 = time.time()
+        answer_parts: List[str] = []
         try:
             for token in engine.generate_stream(req.query, ctx):
+                answer_parts.append(token)
                 yield "event: chunk\ndata: " + json.dumps({"token": token}) + "\n\n"
         except Exception as e:
             # Ensure the client receives a useful error instead of a dropped stream.
@@ -93,19 +185,24 @@ def ask_stream(req: AskRequest):
                 {"token": f"\n\n[stream error: {type(e).__name__}]"}
             ) + "\n\n"
         finally:
-            stats = engine.stats()
+            full_answer = "".join(answer_parts)
+            generation_ms = (time.time() - t_gen0) * 1000.0
             logger.info(
-                "ask_stream.done ctx=%s retrieval_ms=%s generation_ms=%s",
+                "ask_stream.done id=%s ctx=%s retrieval_ms=%.2f generation_ms=%.2f",
+                request_id,
                 len(ctx),
-                stats.get("avg_retrieval_latency_ms"),
-                stats.get("avg_generation_latency_ms"),
+                retrieval_ms,
+                generation_ms,
             )
+            cited_ctx = _filter_ctx_by_citations(full_answer, ctx)
+            citations = [Citation(title=c.get("title"), section=c.get("section")) for c in cited_ctx]
+            chunks = [Chunk(title=c.get("title"), section=c.get("section"), text=c.get("text")) for c in cited_ctx]
             payload = {
                 "citations": [c.model_dump() for c in citations],
                 "chunks": [c.model_dump() for c in chunks],
                 "metrics": {
-                    "retrieval_ms": stats["avg_retrieval_latency_ms"],
-                    "generation_ms": stats["avg_generation_latency_ms"],
+                    "retrieval_ms": round(retrieval_ms, 2),
+                    "generation_ms": round(generation_ms, 2),
                 },
             }
             yield "event: done\ndata: " + json.dumps(payload) + "\n\n"
