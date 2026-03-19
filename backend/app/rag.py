@@ -53,7 +53,7 @@ class InMemoryStore:
 
 class QdrantStore:
     def __init__(self, collection: str, dim: int = 384):
-        self.client = QdrantClient(url="http://qdrant:6333", timeout=10.0)
+        self.client = QdrantClient(url=settings.qdrant_url, timeout=10.0)
         self.collection = collection
         self.dim = dim
         self._ensure_collection()
