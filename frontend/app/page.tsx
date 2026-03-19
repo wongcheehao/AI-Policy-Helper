@@ -9,7 +9,6 @@ import {
   Cpu,
   Brain,
   RefreshCw,
-  Upload,
   Sparkles,
   ChevronDown,
   ChevronUp,
@@ -20,6 +19,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { ChatMessage, type Citation } from "@/components/chat-message"
 import { ChatInput } from "@/components/chat-input"
 import { MetricsCard } from "@/components/metrics-card"
+import { apiAsk, apiAskStream, apiIngest, apiMetrics } from "@/lib/api"
 
 interface Message {
   id: string
@@ -37,10 +37,15 @@ interface Metrics {
   llm_model: string
 }
 
-const sampleCitations: Citation[] = [
-  { id: "1", title: "Return Policy v2.1", source: "policies/returns.md", snippet: "Returns accepted within 30 days..." },
-  { id: "2", title: "Shipping Guidelines", source: "policies/shipping.md", snippet: "East Malaysia deliveries..." },
-]
+function toCitation(title: string, section: string | null | undefined, snippet: string, id: string): Citation {
+  const sec = (section || "").trim()
+  return {
+    id,
+    title: sec ? `${title} — ${sec}` : title,
+    source: title,
+    snippet,
+  }
+}
 
 export default function PolicyHelper() {
   const [messages, setMessages] = useState<Message[]>([])
@@ -48,12 +53,12 @@ export default function PolicyHelper() {
   const [showAdmin, setShowAdmin] = useState(false)
   const [isIngesting, setIsIngesting] = useState(false)
   const [metrics, setMetrics] = useState<Metrics>({
-    total_docs: 6,
-    total_chunks: 204,
+    total_docs: 0,
+    total_chunks: 0,
     avg_retrieval_latency_ms: 0,
     avg_generation_latency_ms: 0,
-    embedding_model: "local-384",
-    llm_model: "stub",
+    embedding_model: "unknown",
+    llm_model: "unknown",
   })
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
@@ -61,47 +66,115 @@ export default function PolicyHelper() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
 
+  useEffect(() => {
+    const run = async () => {
+      try {
+        const m = await apiMetrics()
+        setMetrics(m)
+      } catch {
+        // Keep defaults if backend isn't reachable yet.
+      }
+    }
+    run()
+  }, [])
+
   const handleSend = async (content: string) => {
     const userMessage: Message = {
       id: Date.now().toString(),
       role: "user",
       content,
     }
-    setMessages((prev) => [...prev, userMessage])
+    const assistantId = (Date.now() + 1).toString()
+    setMessages((prev) => [
+      ...prev,
+      userMessage,
+      { id: assistantId, role: "assistant", content: "", citations: [] },
+    ])
     setIsLoading(true)
 
-    // Simulate streaming response - replace with actual API call
-    await new Promise((resolve) => setTimeout(resolve, 1500))
+    try {
+      const k = 4
+      let donePayload: any | null = null
 
-    const assistantMessage: Message = {
-      id: (Date.now() + 1).toString(),
-      role: "assistant",
-      content: `Based on our policy documents, I can help answer your question about "${content}". This is a demo response that would be replaced by actual RAG-generated content with citations from your ingested documents.`,
-      citations: sampleCitations,
+      await apiAskStream(
+        content,
+        k,
+        (token) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId ? { ...m, content: (m.content || "") + token } : m,
+            ),
+          )
+        },
+        (payload) => {
+          donePayload = payload
+        },
+      )
+
+      if (donePayload) {
+        const citations: Citation[] = (donePayload.citations || []).map((c: any, i: number) => {
+          const chunkText =
+            donePayload.chunks && donePayload.chunks[i]
+              ? String(donePayload.chunks[i].text || "")
+              : ""
+          const snippet = chunkText.slice(0, 140) + (chunkText.length > 140 ? "…" : "")
+          return toCitation(String(c.title || "Untitled"), c.section, snippet, String(i + 1))
+        })
+
+        setMessages((prev) =>
+          prev.map((m) => (m.id === assistantId ? { ...m, citations } : m)),
+        )
+
+        // Refresh metrics after a full request so the dashboard reflects real latencies.
+        try {
+          const m = await apiMetrics()
+          setMetrics(m)
+        } catch {
+          // ignore
+        }
+      }
+    } catch {
+      // Fallback to non-streaming ask if SSE fails
+      try {
+        const res = await apiAsk(content, 4)
+        const citations: Citation[] = (res.citations || []).map((c, i) => {
+          const chunkText = res.chunks && res.chunks[i] ? String(res.chunks[i].text || "") : ""
+          const snippet = chunkText.slice(0, 140) + (chunkText.length > 140 ? "…" : "")
+          return toCitation(String(c.title || "Untitled"), c.section, snippet, String(i + 1))
+        })
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId ? { ...m, content: res.answer, citations } : m,
+          ),
+        )
+        const m = await apiMetrics()
+        setMetrics(m)
+      } catch {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId ? { ...m, content: "Error: failed to fetch answer." } : m,
+          ),
+        )
+      }
+    } finally {
+      setIsLoading(false)
     }
-    setMessages((prev) => [...prev, assistantMessage])
-    setIsLoading(false)
   }
 
   const handleIngestDocs = async () => {
     setIsIngesting(true)
-    // Simulate ingestion - replace with actual API call
-    await new Promise((resolve) => setTimeout(resolve, 2000))
-    setMetrics((prev) => ({
-      ...prev,
-      total_docs: prev.total_docs + 3,
-      total_chunks: prev.total_chunks + 85,
-    }))
-    setIsIngesting(false)
+    try {
+      await apiIngest()
+      const m = await apiMetrics()
+      setMetrics(m)
+    } finally {
+      setIsIngesting(false)
+    }
   }
 
   const handleRefreshMetrics = async () => {
-    // Simulate refresh - replace with actual API call
-    setMetrics((prev) => ({
-      ...prev,
-      avg_retrieval_latency_ms: Math.floor(Math.random() * 100) + 20,
-      avg_generation_latency_ms: Math.floor(Math.random() * 500) + 100,
-    }))
+    const m = await apiMetrics()
+    setMetrics(m)
   }
 
   return (
@@ -190,7 +263,7 @@ export default function PolicyHelper() {
                   {isIngesting ? (
                     <RefreshCw className="w-4 h-4 animate-spin" />
                   ) : (
-                    <Upload className="w-4 h-4" />
+                    <Database className="w-4 h-4" />
                   )}
                   {isIngesting ? "Ingesting..." : "Ingest Sample Docs"}
                 </Button>
