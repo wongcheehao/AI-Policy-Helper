@@ -1,4 +1,5 @@
 from app.ingest import chunk_text
+from app.rag import build_chunks_from_docs
 
 
 def test_chunk_text_respects_sentence_boundaries(monkeypatch):
@@ -20,4 +21,11 @@ def test_chunk_text_applies_overlap_words():
     # The last 2 words of chunk 0 should appear at the start of chunk 1.
     tail = " ".join(chunks[0].split()[-2:])
     assert " ".join(chunks[1].split()[:2]) == tail
+
+
+def test_build_chunks_prefixes_section_heading(monkeypatch):
+    """Chunk text should include section heading prefix to preserve context for bullets."""
+    docs = [{"title": "Doc.md", "section": "Refund Windows", "text": "A. B."}]
+    chunks = build_chunks_from_docs(docs, chunk_size=10, overlap=0)
+    assert chunks[0]["text"].startswith("Refund Windows\n\n")
 

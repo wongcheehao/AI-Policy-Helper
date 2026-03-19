@@ -28,6 +28,13 @@ Defaults are defined in `backend/app/constants.py` and surfaced via env (`CHUNK_
 5. **Long-sentence fallback**:
    - If a single “sentence” is longer than `chunk_size` and the current chunk is empty, hard-split by word budget with overlap.
 
+### Context preservation (section heading prefix)
+
+When building indexed chunks, we prefix each chunk’s text with its Markdown section heading:
+
+- Format: `"{section}\\n\\n{chunk_text}"`
+- Rationale: the dataset contains short, bullet-heavy policy sections; including the heading helps embeddings retain “what this list is about” (e.g., “Refund Windows”, “SLA”, “Exclusions”).
+
 ### Trade-offs
 
 - **Pros**:

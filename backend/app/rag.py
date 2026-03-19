@@ -288,6 +288,8 @@ class RAGEngine:
 def build_chunks_from_docs(docs: List[Dict], chunk_size: int, overlap: int) -> List[Dict]:
     out = []
     for d in docs:
+        section = (d.get("section") or "").strip()
+        prefix = f"{section}\n\n" if section else ""
         for ch in chunk_text(d["text"], chunk_size, overlap):
-            out.append({"title": d["title"], "section": d["section"], "text": ch})
+            out.append({"title": d["title"], "section": d["section"], "text": f"{prefix}{ch}"})
     return out
