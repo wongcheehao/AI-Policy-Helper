@@ -1,21 +1,38 @@
 import time
 import hashlib
 import zlib
+import os
 from typing import List, Dict, Tuple, Iterator
 import numpy as np
 import logging
+
 from .constants import (
     DEFAULT_CONTEXT_PREVIEW_CHARS,
     DEFAULT_EMBED_DIM,
+    DEFAULT_HF_HOME,
+    DEFAULT_SENTENCE_TRANSFORMERS_HOME,
+    DEFAULT_SENTENCE_TRANSFORMER_MODEL,
+    HYBRID_RETRIEVAL_CANDIDATE_MIN,
+    HYBRID_RETRIEVAL_CANDIDATE_MULTIPLIER,
     LOCAL_EMBEDDING_MODEL_NAME,
     OPENROUTER_BASE_URL,
+    OPENROUTER_TEMPERATURE,
     QDRANT_DENSE_VECTOR_NAME,
     QDRANT_SPARSE_VECTOR_NAME,
     QDRANT_TIMEOUT_S,
+    RERANK_EMPTY_TEXT_PENALTY,
+    RETRIEVAL_CANDIDATE_MIN,
+    RETRIEVAL_CANDIDATE_MULTIPLIER,
     SPARSE_HASH_DIM,
     SOURCE_CITATION_MARKER,
+    STUB_STREAM_CHUNK_SIZE,
     SYSTEM_PROMPT,
 )
+
+if not os.environ.get("HF_HOME"):
+    os.environ["HF_HOME"] = DEFAULT_HF_HOME
+if not os.environ.get("SENTENCE_TRANSFORMERS_HOME"):
+    os.environ["SENTENCE_TRANSFORMERS_HOME"] = DEFAULT_SENTENCE_TRANSFORMERS_HOME
 from .settings import settings
 from .ingest import chunk_text, doc_hash
 from qdrant_client import QdrantClient, models as qm
@@ -72,7 +89,7 @@ class SentenceTransformerEmbedder:
     enabling meaningful vector retrieval (unlike the deterministic hash embedder).
     """
 
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+    def __init__(self, model_name: str = DEFAULT_SENTENCE_TRANSFORMER_MODEL):
         """
         Args:
             model_name: Hugging Face / Sentence-Transformers model identifier.
@@ -110,6 +127,27 @@ def _build_embedder():
     if name == LOCAL_EMBEDDING_MODEL_NAME:
         return LocalEmbedder(dim=DEFAULT_EMBED_DIM)
     return SentenceTransformerEmbedder(model_name=name)
+
+
+def _has_text(meta: Dict) -> bool:
+    return bool((meta.get("text", "") or "").strip())
+
+
+def _fallback_answer(err_type: str, query: str, contexts: List[Dict]) -> str:
+    stub = StubLLM()
+    return (
+        "Answer (fallback): The configured LLM provider failed, so this response was "
+        "generated using the offline stub.\n\n"
+        f"Error: {err_type}\n\n"
+        + stub.generate(query, contexts)
+    )
+
+
+def _chunk_text_for_stream(text: str) -> List[str]:
+    return [
+        text[i : i + STUB_STREAM_CHUNK_SIZE]
+        for i in range(0, len(text), STUB_STREAM_CHUNK_SIZE)
+    ]
 
 # ---- Vector store abstraction ----
 class InMemoryStore:
@@ -258,7 +296,10 @@ class QdrantStore:
         #    (`qdrant_client.hybrid.fusion.reciprocal_rank_fusion`)
 
         if settings.hybrid_search_enabled and query_text:
-            candidate_limit = max(k * 4, 20)
+            candidate_limit = max(
+                k * HYBRID_RETRIEVAL_CANDIDATE_MULTIPLIER,
+                HYBRID_RETRIEVAL_CANDIDATE_MIN,
+            )
             dense_req = qm.SearchRequest(
                 vector=qm.NamedVector(name=QDRANT_DENSE_VECTOR_NAME, vector=query.tolist()),
                 limit=candidate_limit,
@@ -319,7 +360,7 @@ class StubReranker:
             # Critical fix: Penalize contexts with no text content
             # This prevents empty source blocks from being sent to the LLM
             if not passage.strip():
-                return -999.0
+                return RERANK_EMPTY_TEXT_PENALTY
             p_tokens = set(_tokenize(passage))
             # Count query tokens (including duplicates in the query) that appear in the passage.
             return float(sum(1 for t in q_tokens if t in p_tokens))
@@ -373,7 +414,7 @@ class CrossEncoderReranker:
             # This prevents empty source blocks from being sent to the LLM
             text = meta.get("text", "") or ""
             if not text.strip():
-                s = -999.0
+                s = RERANK_EMPTY_TEXT_PENALTY
             scored.append((s, i, meta))
 
         scored.sort(key=lambda x: (-x[0], x[1]))
@@ -418,8 +459,7 @@ class StubLLM:
         response incrementally.
         """
         full = self.generate(query, contexts)
-        chunk_size = 25
-        return [full[i : i + chunk_size] for i in range(0, len(full), chunk_size)]
+        return _chunk_text_for_stream(full)
 
 class OpenRouterLLM:
     def __init__(self, api_key: str, model: str = "openai/gpt-4o-mini"):
@@ -474,7 +514,7 @@ class OpenRouterLLM:
                 "title": c.get("title"),
                 "section": c.get("section"),
                 "text_length": len(c.get("text", "") or ""),
-                "has_text": bool((c.get("text", "") or "").strip()),
+                "has_text": _has_text(c),
             }
             for c in contexts
         ]
@@ -491,7 +531,7 @@ class OpenRouterLLM:
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
-            temperature=0.1
+            temperature=OPENROUTER_TEMPERATURE,
         )
         return resp.choices[0].message.content
 
@@ -505,7 +545,7 @@ class OpenRouterLLM:
 
         # Debug: log context details for streaming
         text_lengths = [len(c.get("text", "") or "") for c in contexts]
-        has_text = [bool((c.get("text", "") or "").strip()) for c in contexts]
+        has_text = [_has_text(c) for c in contexts]
         prompt_len = len(user_prompt)
         logger.warning(
             "openrouter.generate_stream query_len=%s contexts=%s text_lengths=%s has_text=%s prompt_len=%s",
@@ -523,7 +563,7 @@ class OpenRouterLLM:
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
                 ],
-                temperature=0.1,
+                temperature=OPENROUTER_TEMPERATURE,
                 stream=True,
             )
 
@@ -679,7 +719,10 @@ class RAGEngine:
         qv = self.embedder.embed(query)
 
         # Retrieve more candidates than needed so reranking has material to work with
-        candidate_limit = max(k * 2, 10)
+        candidate_limit = max(
+            k * RETRIEVAL_CANDIDATE_MULTIPLIER,
+            RETRIEVAL_CANDIDATE_MIN,
+        )
         results = self.store.search(qv, k=candidate_limit, query_text=query)
         candidates = [(score, meta) for score, meta in results]
 
@@ -688,7 +731,11 @@ class RAGEngine:
             reranked = self.reranker.rerank(query, candidates)
             # Filter out results with score <= -999 (penalty for empty text)
             # and keep only the top-k valid results
-            valid_results = [(score, meta) for score, meta in reranked if score > -999.0]
+            valid_results = [
+                (score, meta)
+                for score, meta in reranked
+                if score > RERANK_EMPTY_TEXT_PENALTY
+            ]
             results = valid_results[:k] if valid_results else reranked[:k]
             logger.debug(
                 "rag.retrieve k=%s candidates=%s reranked=%s valid=%s ms=%.2f",
@@ -713,18 +760,12 @@ class RAGEngine:
         except Exception as e:
             # If a real LLM backend fails at request-time (e.g., invalid API key),
             # fall back to the deterministic stub so the app remains usable.
-            stub = StubLLM()
             logger.warning(
                 "rag.generate.fallback llm=%s err=%s",
                 self.llm_name,
                 type(e).__name__,
             )
-            answer = (
-                "Answer (fallback): The configured LLM provider failed, so this response was "
-                "generated using the offline stub.\n\n"
-                f"Error: {type(e).__name__}\n\n"
-                + stub.generate(query, contexts)
-            )
+            answer = _fallback_answer(type(e).__name__, query, contexts)
         elapsed_ms = (time.time() - t0) * 1000.0
         self.metrics.add_generation(elapsed_ms)
         logger.debug(
@@ -761,18 +802,13 @@ class RAGEngine:
                             yield chunk
             except Exception as e:
                 # Keep SSE alive even if the upstream provider fails.
-                stub = StubLLM()
                 logger.warning(
                     "rag.generate_stream.fallback llm=%s err=%s",
                     self.llm_name,
                     type(e).__name__,
                 )
-                yield (
-                    "Answer (fallback): The configured LLM provider failed, so this response was "
-                    "generated using the offline stub.\n\n"
-                    f"Error: {type(e).__name__}\n\n"
-                )
-                for chunk in stub.generate_stream(query, contexts):
+                fallback = _fallback_answer(type(e).__name__, query, contexts)
+                for chunk in _chunk_text_for_stream(fallback):
                     yield chunk
         finally:
             elapsed_ms = (time.time() - t0) * 1000.0

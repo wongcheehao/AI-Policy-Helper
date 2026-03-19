@@ -11,6 +11,10 @@ LOCAL_EMBEDDING_MODEL_NAME = "local-384"
 DEFAULT_SENTENCE_TRANSFORMER_MODEL = "all-MiniLM-L6-v2"
 DEFAULT_EMBED_DIM = 384
 DEFAULT_TOP_K = 4
+RETRIEVAL_CANDIDATE_MULTIPLIER = 2
+RETRIEVAL_CANDIDATE_MIN = 10
+HYBRID_RETRIEVAL_CANDIDATE_MULTIPLIER = 4
+HYBRID_RETRIEVAL_CANDIDATE_MIN = 20
 
 # Hybrid search (Qdrant dense + sparse)
 DEFAULT_HYBRID_SEARCH_ENABLED = True
@@ -45,6 +49,8 @@ SENTENCE_SPLIT_PATTERN = r"(?<=[.!?])\s+"
 
 # Generation / prompting
 DEFAULT_CONTEXT_PREVIEW_CHARS = 600
+OPENROUTER_TEMPERATURE = 0.1
+STUB_STREAM_CHUNK_SIZE = 25
 
 # Logging
 # Keep retrieved chunk previews short to avoid dumping full docs into logs.
@@ -53,6 +59,11 @@ RETRIEVAL_LOG_PREVIEW_CHARS = 160
 # Providers / infra
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 QDRANT_TIMEOUT_S = 10.0
+DEFAULT_HF_HOME = "/app/.cache/huggingface"
+DEFAULT_SENTENCE_TRANSFORMERS_HOME = "/app/.cache/sentence_transformers"
+
+# Reranking
+RERANK_EMPTY_TEXT_PENALTY = -999.0
 
 # ---- Generation / prompting (RAG grounding) ----
 #
