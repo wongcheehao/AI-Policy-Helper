@@ -72,14 +72,14 @@ Primary knobs live in `.env` (copy from `.env.example`):
 
 ```mermaid
 flowchart LR
-userQuery[UserQuery] --> apiAsk[/api/ask]
-apiAsk --> answerCache[AnswerCacheLookup]
-answerCache -->|miss| retrieve[RetrieveTopK]
-retrieve --> rerank[Rerank]
-rerank --> generate[GenerateAnswer]
-generate --> citationFilter[FilterByCitationMarkers]
-citationFilter --> response[Answer+Citations+Metrics]
-answerCache -->|hit| response
+userQuery["UserQuery"] --> apiAsk["/api/ask"]
+apiAsk --> answerCache["AnswerCacheLookup"]
+answerCache -->|"miss"| retrieve["RetrieveTopK"]
+retrieve --> rerank["Rerank"]
+rerank --> generate["GenerateAnswer"]
+generate --> citationFilter["FilterByCitationMarkers"]
+citationFilter --> response["Answer + Citations + Metrics"]
+answerCache -->|"hit"| response
 ```
 
 Request path in practice:
