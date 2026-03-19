@@ -559,21 +559,31 @@ class RAGEngine:
         self.metrics = Metrics()
         self._doc_titles = set()
         self._chunk_count = 0
+        # In-process dedup set used to make repeated `/api/ingest` calls idempotent
+        # for the same running server (common during UI testing).
+        self._chunk_hashes = set()
 
     def ingest_chunks(self, chunks: List[Dict]) -> Tuple[int, int]:
         """
         Embed and index all chunks.
 
         Returns:
-            (new_docs_count, total_chunks_indexed)
+            (new_docs_count, newly_indexed_chunks)
+
+        Notes:
+            - Chunk IDs are deterministic (derived from `doc_hash(text)`), so Qdrant
+              upserts are safe; however, we also track hashes in-process to keep
+              `total_chunks` metrics stable when users click "ingest" repeatedly.
         """
-        vectors = []
-        metas = []
+        vectors: List[np.ndarray] = []
+        metas: List[Dict] = []
         doc_titles_before = set(self._doc_titles)
 
         for ch in chunks:
             text = ch["text"]
             h = doc_hash(text)
+            if h in self._chunk_hashes:
+                continue
             # Qdrant point IDs must be either unsigned integers or UUIDs.
             # Our `doc_hash()` returns a hex string, so we convert it into a deterministic
             # 64-bit unsigned integer ID for compatibility.
@@ -589,9 +599,11 @@ class RAGEngine:
             vectors.append(v)
             metas.append(meta)
             self._doc_titles.add(ch["title"])
+            self._chunk_hashes.add(h)
             self._chunk_count += 1
 
-        self.store.upsert(vectors, metas)
+        if metas:
+            self.store.upsert(vectors, metas)
         return (len(self._doc_titles) - len(doc_titles_before), len(metas))
 
     def retrieve(self, query: str, k: int = 4) -> List[Dict]:

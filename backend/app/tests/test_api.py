@@ -10,6 +10,8 @@ def test_health(client):
 def test_ingest_and_ask(client):
     r = client.post("/api/ingest")
     assert r.status_code == 200
+    ingest = r.json()
+    assert ingest["indexed_chunks"] > 0
     # Ask a deterministic question
     r2 = client.post("/api/ask", json={"query":"What is the refund window for small appliances?"})
     assert r2.status_code == 200
@@ -22,6 +24,19 @@ def test_ingest_and_ask(client):
     if settings.llm_provider == "stub":
         assert "Sources:" in data["answer"]
         assert SOURCE_CITATION_MARKER.format(n=1) in data["answer"]
+
+def test_ingest_is_idempotent(client):
+    r1 = client.post("/api/ingest")
+    assert r1.status_code == 200
+    first = r1.json()
+    # Other tests may have already ingested docs in this same process; the key
+    # contract here is that repeated ingestion must not add duplicates.
+    assert first["indexed_chunks"] >= 0
+
+    r2 = client.post("/api/ingest")
+    assert r2.status_code == 200
+    second = r2.json()
+    assert second["indexed_chunks"] == 0
 
 
 def test_ask_stream_sse(client):
