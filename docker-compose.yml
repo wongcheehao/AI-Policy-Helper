@@ -18,8 +18,8 @@ services:
       - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
       - VECTOR_STORE=${VECTOR_STORE:-qdrant}
       - COLLECTION_NAME=${COLLECTION_NAME:-policy_helper}
-      - CHUNK_SIZE=${CHUNK_SIZE:-700}
-      - CHUNK_OVERLAP=${CHUNK_OVERLAP:-80}
+      - CHUNK_SIZE=${CHUNK_SIZE:-256}
+      - CHUNK_OVERLAP=${CHUNK_OVERLAP:-40}
     volumes:
       - ./data:/app/data:ro
     ports:
