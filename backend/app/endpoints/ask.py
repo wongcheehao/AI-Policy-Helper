@@ -6,7 +6,7 @@ from typing import List
 from fastapi import APIRouter, Depends
 from starlette.responses import StreamingResponse
 
-from ..citations import filter_ctx_by_citations
+from ..citations import select_cited_sources
 from ..constants import DEFAULT_TOP_K
 from ..constants import RETRIEVAL_LOG_PREVIEW_CHARS
 from ..deps import get_engine, logger
@@ -64,9 +64,20 @@ def ask(req: AskRequest, engine: RAGEngine = Depends(get_engine)):
         generation_ms,
     )
 
-    cited_ctx = filter_ctx_by_citations(answer, ctx)
-    citations = [Citation(title=c.get("title"), section=c.get("section")) for c in cited_ctx]
-    chunks = [Chunk(title=c.get("title"), section=c.get("section"), text=c.get("text")) for c in cited_ctx]
+    cited = select_cited_sources(answer, ctx)
+    citations = [
+        Citation(source_id=source_id, title=c.get("title"), section=c.get("section"))
+        for source_id, c in cited
+    ]
+    chunks = [
+        Chunk(
+            source_id=source_id,
+            title=c.get("title"),
+            section=c.get("section"),
+            text=c.get("text"),
+        )
+        for source_id, c in cited
+    ]
     return AskResponse(
         query=req.query,
         answer=answer,
@@ -157,9 +168,20 @@ def ask_stream(req: AskRequest, engine: RAGEngine = Depends(get_engine)):
                 retrieval_ms,
                 generation_ms,
             )
-            cited_ctx = filter_ctx_by_citations(full_answer, ctx)
-            citations = [Citation(title=c.get("title"), section=c.get("section")) for c in cited_ctx]
-            chunks = [Chunk(title=c.get("title"), section=c.get("section"), text=c.get("text")) for c in cited_ctx]
+            cited = select_cited_sources(full_answer, ctx)
+            citations = [
+                Citation(source_id=source_id, title=c.get("title"), section=c.get("section"))
+                for source_id, c in cited
+            ]
+            chunks = [
+                Chunk(
+                    source_id=source_id,
+                    title=c.get("title"),
+                    section=c.get("section"),
+                    text=c.get("text"),
+                )
+                for source_id, c in cited
+            ]
             payload = {
                 "citations": [c.model_dump() for c in citations],
                 "chunks": [c.model_dump() for c in chunks],

@@ -11,10 +11,12 @@ class AskRequest(BaseModel):
     k: int | None = DEFAULT_TOP_K
 
 class Citation(BaseModel):
+    source_id: int
     title: str
     section: str | None = None
 
 class Chunk(BaseModel):
+    source_id: int
     title: str
     section: str | None = None
     text: str

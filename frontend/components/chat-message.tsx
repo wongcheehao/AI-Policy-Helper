@@ -45,23 +45,28 @@ function superscriptLabel(n: number): string {
     .join("")
 }
 
-function extractCitedSourceIds(content: string): Set<string> {
-  const ids = new Set<string>()
+function extractCitedSourceIdsInOrder(content: string): string[] {
+  const ids: string[] = []
+  const seen = new Set<string>()
   const re = /\[\^(\d+)\]/g
   let m: RegExpExecArray | null
   while ((m = re.exec(content)) !== null) {
-    ids.add(m[1])
+    const id = m[1]
+    if (seen.has(id)) continue
+    seen.add(id)
+    ids.push(id)
   }
   return ids
 }
 
-function linkifyCitationMarkers(content: string): string {
+function linkifyCitationMarkers(content: string, remap?: Map<string, string>): string {
   // Transform `[^1]` into a markdown link that scrolls to the matching source row.
   // We keep the label as a unicode superscript for the "small 1,2,3" look.
   return content.replace(/\[\^(\d+)\]/g, (_full, n) => {
-    const num = Number(n)
+    const mapped = remap?.get(String(n)) ?? String(n)
+    const num = Number(mapped)
     const label = Number.isFinite(num) ? superscriptLabel(num) : String(n)
-    return `[${label}](#source-${n})`
+    return `[${label}](#source-${mapped})`
   })
 }
 
@@ -129,18 +134,31 @@ const markdownComponents = {
 
 export function ChatMessage({ role, content, citations, isStreaming }: ChatMessageProps) {
   const allCitations = citations ?? []
-  const citedIds = role === "assistant" ? extractCitedSourceIds(content) : new Set<string>()
+  const citedIdsInOrder = role === "assistant" ? extractCitedSourceIdsInOrder(content) : []
+  const citedIdSet = new Set(citedIdsInOrder)
   const isNoInfoAnswer =
     role === "assistant" &&
     content.trim().replace(/\s+/g, " ") === "I don't have enough information to answer that."
-  const visibleCitations =
+  const rawVisibleCitations =
     isNoInfoAnswer
       ? []
-      : role === "assistant" && citedIds.size > 0
-      ? allCitations.filter((c) => citedIds.has(c.id))
+      : role === "assistant" && citedIdSet.size > 0
+      ? allCitations.filter((c) => citedIdSet.has(c.id))
       : allCitations
+
+  // Reindex per answer so displayed sources always start at 1,2,3...
+  // while preserving correct marker-to-source mapping.
+  const idRemap = new Map<string, string>()
+  citedIdsInOrder.forEach((originalId, index) => {
+    idRemap.set(originalId, String(index + 1))
+  })
+  const visibleCitations = rawVisibleCitations.map((citation) => ({
+    ...citation,
+    id: idRemap.get(citation.id) ?? citation.id,
+  }))
   const hasCitations = visibleCitations.length > 0
-  const displayContent = role === "assistant" ? linkifyCitationMarkers(content) : content
+  const displayContent =
+    role === "assistant" ? linkifyCitationMarkers(content, idRemap) : content
 
   return (
     <div

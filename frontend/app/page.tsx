@@ -123,7 +123,14 @@ export default function PolicyHelper() {
               ? String(donePayload.chunks[i].text || "")
               : ""
           const snippet = chunkText.slice(0, 140) + (chunkText.length > 140 ? "…" : "")
-          return toCitation(String(c.title || "Untitled"), c.section, snippet, String(i + 1), chunkText)
+          const sourceId = Number(c.source_id ?? i + 1)
+          return toCitation(
+            String(c.title || "Untitled"),
+            c.section,
+            snippet,
+            String(sourceId),
+            chunkText,
+          )
         })
 
         setMessages((prev) =>
@@ -145,7 +152,14 @@ export default function PolicyHelper() {
         const citations: Citation[] = (res.citations || []).map((c, i) => {
           const chunkText = res.chunks && res.chunks[i] ? String(res.chunks[i].text || "") : ""
           const snippet = chunkText.slice(0, 140) + (chunkText.length > 140 ? "…" : "")
-          return toCitation(String(c.title || "Untitled"), c.section, snippet, String(i + 1), chunkText)
+          const sourceId = Number(c.source_id ?? i + 1)
+          return toCitation(
+            String(c.title || "Untitled"),
+            c.section,
+            snippet,
+            String(sourceId),
+            chunkText,
+          )
         })
         setMessages((prev) =>
           prev.map((m) =>

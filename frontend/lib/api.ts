@@ -13,14 +13,14 @@ export type Metrics = {
 export type AskResponse = {
   query: string;
   answer: string;
-  citations: { title: string; section?: string | null }[];
-  chunks: { title: string; section?: string | null; text: string }[];
+  citations: { source_id: number; title: string; section?: string | null }[];
+  chunks: { source_id: number; title: string; section?: string | null; text: string }[];
   metrics: { retrieval_ms: number; generation_ms: number };
 };
 
 export type StreamDonePayload = {
-  citations: { title: string; section?: string | null }[];
-  chunks: { title: string; section?: string | null; text: string }[];
+  citations: { source_id: number; title: string; section?: string | null }[];
+  chunks: { source_id: number; title: string; section?: string | null; text: string }[];
   metrics: { retrieval_ms: number; generation_ms: number };
 };
 
