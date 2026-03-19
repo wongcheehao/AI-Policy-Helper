@@ -3,6 +3,7 @@ import hashlib
 import zlib
 from typing import List, Dict, Tuple, Iterator
 import numpy as np
+import logging
 from .constants import (
     CITATION_BRACKET_FORMAT,
     DEFAULT_CONTEXT_PREVIEW_CHARS,
@@ -18,6 +19,8 @@ from .constants import (
 from .settings import settings
 from .ingest import chunk_text, doc_hash
 from qdrant_client import QdrantClient, models as qm
+
+logger = logging.getLogger("app.rag")
 
 # ---- Simple local embedder (deterministic) ----
 def _tokenize(s: str) -> List[str]:
@@ -512,6 +515,13 @@ class RAGEngine:
     def __init__(self):
         self.embedder = _build_embedder()
         embed_dim = int(getattr(self.embedder, "dim", DEFAULT_EMBED_DIM))
+        logger.info(
+            "rag.init embedding_model=%s embed_dim=%s vector_store=%s llm_provider=%s",
+            settings.embedding_model,
+            embed_dim,
+            settings.vector_store,
+            settings.llm_provider,
+        )
         # Vector store selection
         if settings.vector_store == "qdrant":
             try:
@@ -535,6 +545,7 @@ class RAGEngine:
         else:
             self.llm = StubLLM()
             self.llm_name = "stub"
+        logger.info("rag.llm selected=%s", self.llm_name)
 
         self.metrics = Metrics()
         self._doc_titles = set()
@@ -584,13 +595,39 @@ class RAGEngine:
         t0 = time.time()
         qv = self.embedder.embed(query)
         results = self.store.search(qv, k=k, query_text=query)
-        self.metrics.add_retrieval((time.time()-t0)*1000.0)
+        elapsed_ms = (time.time() - t0) * 1000.0
+        self.metrics.add_retrieval(elapsed_ms)
+        logger.debug("rag.retrieve k=%s results=%s ms=%.2f", k, len(results), elapsed_ms)
         return [meta for score, meta in results]
 
     def generate(self, query: str, contexts: List[Dict]) -> str:
         t0 = time.time()
-        answer = self.llm.generate(query, contexts)
-        self.metrics.add_generation((time.time()-t0)*1000.0)
+        try:
+            answer = self.llm.generate(query, contexts)
+        except Exception as e:
+            # If a real LLM backend fails at request-time (e.g., invalid API key),
+            # fall back to the deterministic stub so the app remains usable.
+            stub = StubLLM()
+            logger.warning(
+                "rag.generate.fallback llm=%s err=%s",
+                self.llm_name,
+                type(e).__name__,
+            )
+            answer = (
+                "Answer (fallback): The configured LLM provider failed, so this response was "
+                "generated using the offline stub.\n\n"
+                f"Error: {type(e).__name__}\n\n"
+                + stub.generate(query, contexts)
+            )
+        elapsed_ms = (time.time() - t0) * 1000.0
+        self.metrics.add_generation(elapsed_ms)
+        logger.debug(
+            "rag.generate llm=%s ctx=%s answer_len=%s ms=%.2f",
+            self.llm_name,
+            len(contexts),
+            len(answer or ""),
+            elapsed_ms,
+        )
         return answer
 
     def generate_stream(self, query: str, contexts: List[Dict]):
@@ -606,17 +643,40 @@ class RAGEngine:
                 return
 
             # StubLLM returns a list of chunks; OpenRouterLLM yields incrementally.
-            streamed = generate_fn(query, contexts)
-            if isinstance(streamed, list):
-                for chunk in streamed:
-                    if chunk:
-                        yield chunk
-            else:
-                for chunk in streamed:
-                    if chunk:
-                        yield chunk
+            try:
+                streamed = generate_fn(query, contexts)
+                if isinstance(streamed, list):
+                    for chunk in streamed:
+                        if chunk:
+                            yield chunk
+                else:
+                    for chunk in streamed:
+                        if chunk:
+                            yield chunk
+            except Exception as e:
+                # Keep SSE alive even if the upstream provider fails.
+                stub = StubLLM()
+                logger.warning(
+                    "rag.generate_stream.fallback llm=%s err=%s",
+                    self.llm_name,
+                    type(e).__name__,
+                )
+                yield (
+                    "Answer (fallback): The configured LLM provider failed, so this response was "
+                    "generated using the offline stub.\n\n"
+                    f"Error: {type(e).__name__}\n\n"
+                )
+                for chunk in stub.generate_stream(query, contexts):
+                    yield chunk
         finally:
-            self.metrics.add_generation((time.time() - t0) * 1000.0)
+            elapsed_ms = (time.time() - t0) * 1000.0
+            self.metrics.add_generation(elapsed_ms)
+            logger.debug(
+                "rag.generate_stream llm=%s ctx=%s ms=%.2f",
+                self.llm_name,
+                len(contexts),
+                elapsed_ms,
+            )
 
     def stats(self) -> Dict:
         m = self.metrics.summary()

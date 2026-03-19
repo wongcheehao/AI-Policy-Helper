@@ -9,6 +9,7 @@ from .constants import (
 )
 
 class Settings(BaseModel):
+    log_level: str = os.getenv("LOG_LEVEL", "INFO")
     embedding_model: str = os.getenv("EMBEDDING_MODEL", DEFAULT_SENTENCE_TRANSFORMER_MODEL)
     llm_provider: str = os.getenv("LLM_PROVIDER", "stub")  # stub | openrouter | ollama
     openrouter_api_key: str | None = os.getenv("OPENROUTER_API_KEY")
