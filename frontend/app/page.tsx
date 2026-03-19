@@ -37,13 +37,20 @@ interface Metrics {
   llm_model: string
 }
 
-function toCitation(title: string, section: string | null | undefined, snippet: string, id: string): Citation {
+function toCitation(
+  title: string,
+  section: string | null | undefined,
+  snippet: string,
+  id: string,
+  text?: string,
+): Citation {
   const sec = (section || "").trim()
   return {
     id,
     title: sec ? `${title} — ${sec}` : title,
     source: title,
     snippet,
+    text,
   }
 }
 
@@ -118,7 +125,7 @@ export default function PolicyHelper() {
               ? String(donePayload.chunks[i].text || "")
               : ""
           const snippet = chunkText.slice(0, 140) + (chunkText.length > 140 ? "…" : "")
-          return toCitation(String(c.title || "Untitled"), c.section, snippet, String(i + 1))
+          return toCitation(String(c.title || "Untitled"), c.section, snippet, String(i + 1), chunkText)
         })
 
         setMessages((prev) =>
@@ -140,7 +147,7 @@ export default function PolicyHelper() {
         const citations: Citation[] = (res.citations || []).map((c, i) => {
           const chunkText = res.chunks && res.chunks[i] ? String(res.chunks[i].text || "") : ""
           const snippet = chunkText.slice(0, 140) + (chunkText.length > 140 ? "…" : "")
-          return toCitation(String(c.title || "Untitled"), c.section, snippet, String(i + 1))
+          return toCitation(String(c.title || "Untitled"), c.section, snippet, String(i + 1), chunkText)
         })
         setMessages((prev) =>
           prev.map((m) =>
