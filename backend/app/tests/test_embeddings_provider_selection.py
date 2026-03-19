@@ -5,7 +5,11 @@ import builtins
 
 import pytest
 
-from app.constants import DEFAULT_EMBED_DIM, LOCAL_EMBEDDING_MODEL_NAME
+from app.constants import (
+    DEFAULT_EMBED_DIM,
+    DEFAULT_SENTENCE_TRANSFORMER_MODEL,
+    LOCAL_EMBEDDING_MODEL_NAME,
+)
 
 
 def _reload_settings_and_rag():
@@ -99,4 +103,18 @@ def test_local_embedder_does_not_require_sentence_transformers(monkeypatch):
     engine = rag.RAGEngine()
 
     assert isinstance(engine.embedder, rag.LocalEmbedder)
+
+
+def test_default_embedding_model_uses_sentence_transformers(monkeypatch):
+    """Ensures default settings use real embeddings (no silent fallback to stub embedder)."""
+    _install_fake_sentence_transformers(monkeypatch, dim=DEFAULT_EMBED_DIM)
+    monkeypatch.delenv("EMBEDDING_MODEL", raising=False)
+    monkeypatch.setenv("VECTOR_STORE", "memory")
+    monkeypatch.setenv("LLM_PROVIDER", "stub")
+
+    _settings, rag = _reload_settings_and_rag()
+    engine = rag.RAGEngine()
+
+    assert _settings.settings.embedding_model == DEFAULT_SENTENCE_TRANSFORMER_MODEL
+    assert isinstance(engine.embedder, rag.SentenceTransformerEmbedder)
 

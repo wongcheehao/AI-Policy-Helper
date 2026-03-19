@@ -8,6 +8,7 @@ instead of hardcoding it.
 
 # Embeddings / retrieval
 LOCAL_EMBEDDING_MODEL_NAME = "local-384"
+DEFAULT_SENTENCE_TRANSFORMER_MODEL = "all-MiniLM-L6-v2"
 DEFAULT_EMBED_DIM = 384
 DEFAULT_TOP_K = 4
 
