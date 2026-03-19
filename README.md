@@ -7,6 +7,10 @@ Local-first RAG assistant for policy/product Q&A with citations.
 - Vector store: Qdrant (default) or in-memory fallback
 - Run mode: stub-first for deterministic local development
 
+## Screenshot
+
+![Policy assistant UI](assets/policy-assistant-screenshot.png)
+
 ## Quick Start (Docker)
 
 ```bash
@@ -18,7 +22,7 @@ docker compose up --build
 - Backend docs: `http://localhost:8000/docs`
 - Qdrant UI: `http://localhost:6333`
 
-## Run with Makefile (convenience)
+## Run with Makefile
 
 ```bash
 make dev   # docker compose up --build
