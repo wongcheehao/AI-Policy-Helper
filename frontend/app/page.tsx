@@ -336,13 +336,13 @@ export default function PolicyHelper() {
                     label="Retrieval"
                     value={`${metrics.avg_retrieval_latency_ms}ms`}
                     icon={<Zap className="w-5 h-5" />}
-                    trend={metrics.avg_retrieval_latency_ms > 50 ? "down" : "up"}
+                    trend="up"
                   />
                   <MetricsCard
                     label="Generation"
                     value={`${metrics.avg_generation_latency_ms}ms`}
                     icon={<Clock className="w-5 h-5" />}
-                    trend={metrics.avg_generation_latency_ms > 300 ? "down" : "up"}
+                    trend="up"
                   />
                   <MetricsCard
                     label="Embedding"
