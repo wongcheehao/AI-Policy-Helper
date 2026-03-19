@@ -25,6 +25,34 @@ export interface ChatMessageProps {
   isStreaming?: boolean
 }
 
+const markdownComponents = {
+  h1: (props: any) => (
+    <h1 className="text-base font-semibold mt-3 mb-2" {...props} />
+  ),
+  h2: (props: any) => (
+    <h2 className="text-sm font-semibold mt-3 mb-2" {...props} />
+  ),
+  h3: (props: any) => (
+    <h3 className="text-sm font-semibold mt-3 mb-2" {...props} />
+  ),
+  p: (props: any) => <p className="text-sm leading-relaxed mb-2" {...props} />,
+  ul: (props: any) => <ul className="list-disc pl-5 mb-2" {...props} />,
+  ol: (props: any) => <ol className="list-decimal pl-5 mb-2" {...props} />,
+  li: (props: any) => <li className="mb-1" {...props} />,
+  code: (props: any) => (
+    <code
+      className="px-1 py-0.5 rounded bg-muted/50 font-mono text-[12px]"
+      {...props}
+    />
+  ),
+  pre: (props: any) => (
+    <pre
+      className="p-3 rounded-md bg-muted/50 overflow-x-auto text-[12px] leading-relaxed"
+      {...props}
+    />
+  ),
+}
+
 export function ChatMessage({ role, content, citations, isStreaming }: ChatMessageProps) {
   const hasCitations = (citations?.length || 0) > 0
 
@@ -48,11 +76,13 @@ export function ChatMessage({ role, content, citations, isStreaming }: ChatMessa
         )}
       </div>
       <div className="flex-1 space-y-3">
-        <div className="text-sm leading-relaxed text-foreground prose prose-sm max-w-none dark:prose-invert">
+        <div className="text-foreground">
           {role === "assistant" ? (
-            <ReactMarkdown skipHtml>{content}</ReactMarkdown>
+            <ReactMarkdown skipHtml components={markdownComponents as any}>
+              {content}
+            </ReactMarkdown>
           ) : (
-            <p>{content}</p>
+            <p className="text-sm leading-relaxed">{content}</p>
           )}
           {isStreaming && (
             <span className="inline-block w-2 h-4 ml-1 bg-primary animate-pulse align-middle" />
@@ -115,8 +145,10 @@ function CitationRow({ citation }: { citation: Citation }) {
           <div className="text-[11px] font-medium text-muted-foreground mb-1">
             {citation.source}
           </div>
-          <div className="text-xs text-foreground whitespace-pre-wrap leading-relaxed">
-            {citation.text || citation.snippet}
+          <div className="text-foreground">
+            <ReactMarkdown skipHtml components={markdownComponents as any}>
+              {citation.text || citation.snippet}
+            </ReactMarkdown>
           </div>
         </div>
       </CollapsibleContent>
