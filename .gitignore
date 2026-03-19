@@ -38,5 +38,18 @@ pnpm-debug.log*
 # cursor rules
 .cursor/rules/
 
+# Frontend (Next.js) build/dev artifacts
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.turbo/
+frontend/.vercel/
+
+# Package manager artifacts
+frontend/.npmrc
+frontend/yarn.lock
+frontend/pnpm-lock.yaml
+frontend/.pnpm-store/
+
 # virtual env
 .venv/

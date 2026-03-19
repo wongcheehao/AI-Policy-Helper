@@ -1,25 +1,82 @@
 'use client';
 import React from 'react';
-import { apiAsk } from '@/lib/api';
+import ReactMarkdown from 'react-markdown';
+import { apiAsk, apiAskStream, StreamDonePayload } from '@/lib/api';
 
-type Message = { role: 'user' | 'assistant', content: string, citations?: {title:string, section?:string}[], chunks?: {title:string, section?:string, text:string}[] };
+type Message = {
+  role: 'user' | 'assistant';
+  content: string;
+  citations?: { title: string; section?: string | null }[];
+  chunks?: { title: string; section?: string | null; text: string }[];
+};
 
 export default function Chat() {
   const [messages, setMessages] = React.useState<Message[]>([]);
   const [q, setQ] = React.useState('');
   const [loading, setLoading] = React.useState(false);
+  const assistantIndexRef = React.useRef<number | null>(null);
+  const scrollRef = React.useRef<HTMLDivElement | null>(null);
+
+  React.useEffect(() => {
+    if (!scrollRef.current) return;
+    scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [messages, loading]);
 
   const send = async () => {
     if (!q.trim()) return;
-    const my = { role: 'user' as const, content: q };
-    setMessages(m => [...m, my]);
+
+    const query = q;
+    setMessages((prev) => {
+      assistantIndexRef.current = prev.length + 1; // index of the appended assistant placeholder
+      return [
+        ...prev,
+        { role: 'user' as const, content: query },
+        { role: 'assistant' as const, content: '', citations: [], chunks: [] },
+      ];
+    });
     setLoading(true);
     try {
-      const res = await apiAsk(q);
-      const ai: Message = { role: 'assistant', content: res.answer, citations: res.citations, chunks: res.chunks };
-      setMessages(m => [...m, ai]);
+      const k = 4;
+      await apiAskStream(
+        query,
+        k,
+        (token) => {
+          const idx = assistantIndexRef.current;
+          if (idx === null) return;
+          setMessages((prev) =>
+            prev.map((m, i) => (i === idx ? { ...m, content: m.content + token } : m)),
+          );
+        },
+        (payload: StreamDonePayload) => {
+          const idx = assistantIndexRef.current;
+          if (idx === null) return;
+          setMessages((prev) =>
+            prev.map((m, i) =>
+              i === idx
+                ? { ...m, citations: payload.citations, chunks: payload.chunks }
+                : m,
+            ),
+          );
+        },
+      );
     } catch (e:any) {
-      setMessages(m => [...m, { role: 'assistant', content: 'Error: ' + e.message }]);
+      // Fallback to non-streaming mode if SSE fails.
+      try {
+        const res = await apiAsk(query);
+        const idx = assistantIndexRef.current;
+        if (idx === null) return;
+        setMessages((prev) =>
+          prev.map((m, i) =>
+            i === idx
+              ? { ...m, content: res.answer, citations: res.citations, chunks: res.chunks }
+              : m,
+          ),
+        );
+      } catch {
+        const idx = assistantIndexRef.current;
+        if (idx === null) return;
+        setMessages((prev) => prev.map((m, i) => (i === idx ? { ...m, content: 'Error: ' + e.message } : m)));
+      }
     } finally {
       setLoading(false);
       setQ('');
@@ -29,11 +86,27 @@ export default function Chat() {
   return (
     <div className="card">
       <h2>Chat</h2>
-      <div style={{maxHeight: 320, overflowY:'auto', padding: 8, border:'1px solid #eee', borderRadius: 8, marginBottom: 12}}>
+      <div
+        ref={scrollRef}
+        style={{
+          maxHeight: 320,
+          overflowY: 'auto',
+          padding: 8,
+          border: '1px solid #eee',
+          borderRadius: 8,
+          marginBottom: 12,
+        }}
+      >
         {messages.map((m, i) => (
           <div key={i} style={{margin: '8px 0'}}>
             <div style={{fontSize:12, color:'#666'}}>{m.role === 'user' ? 'You' : 'Assistant'}</div>
-            <div>{m.content}</div>
+            <div style={{whiteSpace: 'pre-wrap'}}>
+              {m.role === 'assistant' ? (
+                <ReactMarkdown skipHtml={true}>{m.content}</ReactMarkdown>
+              ) : (
+                m.content
+              )}
+            </div>
             {m.citations && m.citations.length>0 && (
               <div style={{marginTop:6}}>
                 {m.citations.map((c, idx) => (
