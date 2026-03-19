@@ -1,6 +1,13 @@
 import time, os, math, json, hashlib
 from typing import List, Dict, Tuple
 import numpy as np
+from .constants import (
+    DEFAULT_CONTEXT_PREVIEW_CHARS,
+    DEFAULT_EMBED_DIM,
+    LOCAL_EMBEDDING_MODEL_NAME,
+    OPENROUTER_BASE_URL,
+    QDRANT_TIMEOUT_S,
+)
 from .settings import settings
 from .ingest import chunk_text, doc_hash
 from qdrant_client import QdrantClient, models as qm
@@ -10,7 +17,7 @@ def _tokenize(s: str) -> List[str]:
     return [t.lower() for t in s.split()]
 
 class LocalEmbedder:
-    def __init__(self, dim: int = 384):
+    def __init__(self, dim: int = DEFAULT_EMBED_DIM):
         self.dim = dim
 
     def embed(self, text: str) -> np.ndarray:
@@ -23,9 +30,58 @@ class LocalEmbedder:
         v = v / (np.linalg.norm(v) + 1e-9)
         return v
 
+
+class SentenceTransformerEmbedder:
+    """
+    Embedding backend powered by Sentence Transformers (SBERT).
+
+    Used when `EMBEDDING_MODEL` is set to a real SBERT model name (e.g.
+    `all-MiniLM-L6-v2`). This produces semantic embeddings for chunks and queries,
+    enabling meaningful vector retrieval (unlike the deterministic hash embedder).
+    """
+
+    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+        """
+        Args:
+            model_name: Hugging Face / Sentence-Transformers model identifier.
+        """
+        try:
+            from sentence_transformers import SentenceTransformer  # optional heavy dependency
+        except ImportError as e:
+            raise RuntimeError(
+                "Sentence-transformers is required when EMBEDDING_MODEL is set to a "
+                "Sentence Transformers model name. Install it with "
+                "`pip install -U sentence-transformers` (or add it to backend/requirements.txt), "
+                f"or set EMBEDDING_MODEL={LOCAL_EMBEDDING_MODEL_NAME} for offline stub-first development."
+            ) from e
+
+        self.model_name = model_name
+        self.model = SentenceTransformer(model_name)
+        self.dim = int(self.model.get_sentence_embedding_dimension())
+
+    def embed(self, text: str) -> np.ndarray:
+        """Return a normalized float32 embedding vector for `text`."""
+        v = self.model.encode(text, normalize_embeddings=True)
+        return np.asarray(v, dtype="float32")
+
+
+def _build_embedder():
+    """
+    Select embedding backend based on configuration.
+
+    - `EMBEDDING_MODEL=local-384` uses `LocalEmbedder` (offline + deterministic).
+    - Any other value is treated as a Sentence-Transformers model name and uses
+      `SentenceTransformerEmbedder`.
+    """
+    # Default stays local/offline unless EMBEDDING_MODEL requests a real model.
+    name = (settings.embedding_model or LOCAL_EMBEDDING_MODEL_NAME).strip()
+    if name == LOCAL_EMBEDDING_MODEL_NAME:
+        return LocalEmbedder(dim=DEFAULT_EMBED_DIM)
+    return SentenceTransformerEmbedder(model_name=name)
+
 # ---- Vector store abstraction ----
 class InMemoryStore:
-    def __init__(self, dim: int = 384):
+    def __init__(self, dim: int = DEFAULT_EMBED_DIM):
         self.dim = dim
         self.vecs: List[np.ndarray] = []
         self.meta: List[Dict] = []
@@ -52,8 +108,8 @@ class InMemoryStore:
         return [(float(sims[i]), self.meta[i]) for i in idx]
 
 class QdrantStore:
-    def __init__(self, collection: str, dim: int = 384):
-        self.client = QdrantClient(url=settings.qdrant_url, timeout=10.0)
+    def __init__(self, collection: str, dim: int = DEFAULT_EMBED_DIM):
+        self.client = QdrantClient(url=settings.qdrant_url, timeout=QDRANT_TIMEOUT_S)
         self.collection = collection
         self.dim = dim
         self._ensure_collection()
@@ -95,7 +151,10 @@ class StubLLM:
         lines.append("Summary:")
         # naive summary of top contexts
         joined = " ".join([c.get("text", "") for c in contexts])
-        lines.append(joined[:600] + ("..." if len(joined) > 600 else ""))
+        lines.append(
+            joined[:DEFAULT_CONTEXT_PREVIEW_CHARS]
+            + ("..." if len(joined) > DEFAULT_CONTEXT_PREVIEW_CHARS else "")
+        )
         return "\n".join(lines)
 
 class OpenRouterLLM:
@@ -103,14 +162,17 @@ class OpenRouterLLM:
         from openai import OpenAI
         self.client = OpenAI(
             api_key=api_key,
-            base_url="https://openrouter.ai/api/v1",
+            base_url=OPENROUTER_BASE_URL,
         )
         self.model = model
 
     def generate(self, query: str, contexts: List[Dict]) -> str:
         prompt = f"You are a helpful company policy assistant. Cite sources by title and section when relevant.\nQuestion: {query}\nSources:\n"
         for c in contexts:
-            prompt += f"- {c.get('title')} | {c.get('section')}\n{c.get('text')[:600]}\n---\n"
+            prompt += (
+                f"- {c.get('title')} | {c.get('section')}\n"
+                f"{c.get('text')[:DEFAULT_CONTEXT_PREVIEW_CHARS]}\n---\n"
+            )
         prompt += "Write a concise, accurate answer grounded in the sources. If unsure, say so."
         resp = self.client.chat.completions.create(
             model=self.model,
@@ -141,15 +203,16 @@ class Metrics:
 
 class RAGEngine:
     def __init__(self):
-        self.embedder = LocalEmbedder(dim=384)
+        self.embedder = _build_embedder()
+        embed_dim = int(getattr(self.embedder, "dim", DEFAULT_EMBED_DIM))
         # Vector store selection
         if settings.vector_store == "qdrant":
             try:
-                self.store = QdrantStore(collection=settings.collection_name, dim=384)
+                self.store = QdrantStore(collection=settings.collection_name, dim=embed_dim)
             except Exception:
-                self.store = InMemoryStore(dim=384)
+                self.store = InMemoryStore(dim=embed_dim)
         else:
-            self.store = InMemoryStore(dim=384)
+            self.store = InMemoryStore(dim=embed_dim)
 
         # LLM selection
         if settings.llm_provider == "openrouter" and settings.openrouter_api_key:

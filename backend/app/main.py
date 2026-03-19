@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 from typing import List
 from .models import IngestResponse, AskRequest, AskResponse, MetricsResponse, Citation, Chunk
 from .settings import settings
+from .constants import DEFAULT_TOP_K
 from .ingest import load_documents
 from .rag import RAGEngine, build_chunks_from_docs
 
@@ -37,7 +38,7 @@ def ingest():
 
 @app.post("/api/ask", response_model=AskResponse)
 def ask(req: AskRequest):
-    ctx = engine.retrieve(req.query, k=req.k or 4)
+    ctx = engine.retrieve(req.query, k=req.k or DEFAULT_TOP_K)
     answer = engine.generate(req.query, ctx)
     citations = [Citation(title=c.get("title"), section=c.get("section")) for c in ctx]
     chunks = [Chunk(title=c.get("title"), section=c.get("section"), text=c.get("text")) for c in ctx]
