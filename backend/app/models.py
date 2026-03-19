@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from typing import List, Dict, Any
 from .constants import DEFAULT_TOP_K
 
 class IngestResponse(BaseModel):

@@ -1,7 +1,10 @@
-import time, os, math, json, hashlib, zlib
+import time
+import hashlib
+import zlib
 from typing import List, Dict, Tuple
 import numpy as np
 from .constants import (
+    CITATION_BRACKET_FORMAT,
     DEFAULT_CONTEXT_PREVIEW_CHARS,
     DEFAULT_EMBED_DIM,
     LOCAL_EMBEDDING_MODEL_NAME,
@@ -10,6 +13,7 @@ from .constants import (
     QDRANT_SPARSE_VECTOR_NAME,
     QDRANT_TIMEOUT_S,
     SPARSE_HASH_DIM,
+    SYSTEM_PROMPT,
 )
 from .settings import settings
 from .ingest import chunk_text, doc_hash
@@ -307,8 +311,6 @@ class StubReranker:
             # Nothing to match: preserve original order.
             return candidates
 
-        q_set = set(q_tokens)
-
         def _score(meta: Dict) -> float:
             passage = meta.get("text", "") or ""
             p_tokens = set(_tokenize(passage))
@@ -369,12 +371,16 @@ class CrossEncoderReranker:
 # ---- LLM provider ----
 class StubLLM:
     def generate(self, query: str, contexts: List[Dict]) -> str:
-        lines = [f"Answer (stub): Based on the following sources:"]
+        lines = ["Answer (stub):", "", "Sources:"]
         for c in contexts:
-            sec = c.get("section") or "Section"
-            lines.append(f"- {c.get('title')} — {sec}")
+            title = c.get("title") or "Untitled"
+            section = c.get("section") or "Section"
+            ref = CITATION_BRACKET_FORMAT.format(title=title, section=section)
+            lines.append(f"- {ref}")
+
+        lines.append("")
         lines.append("Summary:")
-        # naive summary of top contexts
+        # Naive summary of retrieved contexts for offline/demo mode.
         joined = " ".join([c.get("text", "") for c in contexts])
         lines.append(
             joined[:DEFAULT_CONTEXT_PREVIEW_CHARS]
@@ -392,16 +398,37 @@ class OpenRouterLLM:
         self.model = model
 
     def generate(self, query: str, contexts: List[Dict]) -> str:
-        prompt = f"You are a helpful company policy assistant. Cite sources by title and section when relevant.\nQuestion: {query}\nSources:\n"
-        for c in contexts:
-            prompt += (
-                f"- {c.get('title')} | {c.get('section')}\n"
-                f"{c.get('text')[:DEFAULT_CONTEXT_PREVIEW_CHARS]}\n---\n"
+        sources_lines: List[str] = []
+        for i, c in enumerate(contexts, start=1):
+            title = c.get("title") or "Untitled"
+            section = c.get("section") or "Section"
+            ref = CITATION_BRACKET_FORMAT.format(title=title, section=section)
+            sources_lines.append(
+                "\n".join(
+                    [
+                        f"[{i}] {title}",
+                        f"Section: {section}",
+                        f"Citation: {ref}",
+                        c.get("text", "") or "",
+                        "---",
+                    ]
+                )
             )
-        prompt += "Write a concise, accurate answer grounded in the sources. If unsure, say so."
+
+        prompt = "\n".join(
+            [
+                f"Question: {query}",
+                "",
+                "Sources:",
+                "\n".join(sources_lines),
+            ]
+        )
         resp = self.client.chat.completions.create(
             model=self.model,
-            messages=[{"role":"user","content":prompt}],
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
             temperature=0.1
         )
         return resp.choices[0].message.content

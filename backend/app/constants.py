@@ -50,3 +50,28 @@ DEFAULT_CONTEXT_PREVIEW_CHARS = 600
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 QDRANT_TIMEOUT_S = 10.0
 
+# ---- Generation / prompting (RAG grounding) ----
+#
+# PromptingGuide best practice: make the generation step explicitly grounded in
+# retrieved sources, and require a clear citation format to improve faithfulness.
+#
+# Note: we keep the stub answer and OpenRouter answer aligned by using the same
+# citation bracket format: `[Source Title -- Section]`.
+
+# Inline citation format expected in the model's answer.
+CITATION_BRACKET_FORMAT = "[{title} -- {section}]"
+
+# System prompt that instructs the model to answer only from sources and to use
+# the above citation format.
+SYSTEM_PROMPT = """You are a company policy assistant.
+
+Answer ONLY from the provided sources.
+When you use information from a source, include an inline citation in the form
+[{Source Title} -- {Section}].
+
+If the sources do not contain the answer, respond exactly with:
+I don't have enough information to answer that.
+
+Be concise and factual. Do not invent or infer details not present in the sources.
+"""
+
