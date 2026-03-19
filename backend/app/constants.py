@@ -12,6 +12,12 @@ DEFAULT_SENTENCE_TRANSFORMER_MODEL = "all-MiniLM-L6-v2"
 DEFAULT_EMBED_DIM = 384
 DEFAULT_TOP_K = 4
 
+# Hybrid search (Qdrant dense + sparse)
+DEFAULT_HYBRID_SEARCH_ENABLED = True
+QDRANT_DENSE_VECTOR_NAME = "dense"
+QDRANT_SPARSE_VECTOR_NAME = "sparse"
+SPARSE_HASH_DIM = 65536  # hashed vocabulary size for sparse encoding
+
 # Chunking (word-based heuristic; tuned for SBERT-friendly context sizes)
 #
 # Why ~256 words?

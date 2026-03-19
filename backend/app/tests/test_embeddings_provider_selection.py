@@ -1,4 +1,3 @@
-import importlib
 import sys
 import types
 import builtins
@@ -10,20 +9,6 @@ from app.constants import (
     DEFAULT_SENTENCE_TRANSFORMER_MODEL,
     LOCAL_EMBEDDING_MODEL_NAME,
 )
-
-
-def _reload_settings_and_rag():
-    if "app.settings" in sys.modules:
-        importlib.reload(sys.modules["app.settings"])
-    else:
-        import app.settings  # noqa: F401
-
-    if "app.rag" in sys.modules:
-        importlib.reload(sys.modules["app.rag"])
-    else:
-        import app.rag  # noqa: F401
-
-    return sys.modules["app.settings"], sys.modules["app.rag"]
 
 
 def _set_common_env(monkeypatch, *, embedding_model: str):
@@ -60,11 +45,11 @@ def _block_sentence_transformers_import(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", _blocked_import)
 
 
-def test_embedder_defaults_to_local_384(monkeypatch):
+def test_embedder_defaults_to_local_384(monkeypatch, reload_settings_and_rag):
     """Keeps default runs offline: local embedder + matching store dimension."""
     _set_common_env(monkeypatch, embedding_model=LOCAL_EMBEDDING_MODEL_NAME)
 
-    _settings, rag = _reload_settings_and_rag()
+    _settings, rag = reload_settings_and_rag()
     engine = rag.RAGEngine()
 
     assert isinstance(engine.embedder, rag.LocalEmbedder)
@@ -80,13 +65,13 @@ def test_embedder_defaults_to_local_384(monkeypatch):
     ],
 )
 def test_sentence_transformers_embedder_dim_matches_store_dim(
-    monkeypatch, reported_dim: int, embedding_model: str
+    monkeypatch, reload_settings_and_rag, reported_dim: int, embedding_model: str
 ):
     """Prevents runtime failures: store dim must match the embedder’s true dimension."""
     _install_fake_sentence_transformers(monkeypatch, dim=reported_dim)
     _set_common_env(monkeypatch, embedding_model=embedding_model)
 
-    _settings, rag = _reload_settings_and_rag()
+    _settings, rag = reload_settings_and_rag()
     engine = rag.RAGEngine()
 
     assert isinstance(engine.embedder, rag.SentenceTransformerEmbedder)
@@ -94,25 +79,25 @@ def test_sentence_transformers_embedder_dim_matches_store_dim(
     assert engine.store.dim == reported_dim
 
 
-def test_local_embedder_does_not_require_sentence_transformers(monkeypatch):
+def test_local_embedder_does_not_require_sentence_transformers(monkeypatch, reload_settings_and_rag):
     """Default stub-first mode must start without optional heavy embedding deps installed."""
     _set_common_env(monkeypatch, embedding_model=LOCAL_EMBEDDING_MODEL_NAME)
     _block_sentence_transformers_import(monkeypatch)
 
-    _settings, rag = _reload_settings_and_rag()
+    _settings, rag = reload_settings_and_rag()
     engine = rag.RAGEngine()
 
     assert isinstance(engine.embedder, rag.LocalEmbedder)
 
 
-def test_default_embedding_model_uses_sentence_transformers(monkeypatch):
+def test_default_embedding_model_uses_sentence_transformers(monkeypatch, reload_settings_and_rag):
     """Ensures default settings use real embeddings (no silent fallback to stub embedder)."""
     _install_fake_sentence_transformers(monkeypatch, dim=DEFAULT_EMBED_DIM)
     monkeypatch.delenv("EMBEDDING_MODEL", raising=False)
     monkeypatch.setenv("VECTOR_STORE", "memory")
     monkeypatch.setenv("LLM_PROVIDER", "stub")
 
-    _settings, rag = _reload_settings_and_rag()
+    _settings, rag = reload_settings_and_rag()
     engine = rag.RAGEngine()
 
     assert _settings.settings.embedding_model == DEFAULT_SENTENCE_TRANSFORMER_MODEL

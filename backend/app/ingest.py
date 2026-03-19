@@ -61,12 +61,15 @@ def chunk_text(text: str, chunk_size: int, overlap: int) -> List[str]:
         if not current:
             return
         chunks.append(" ".join(current).strip())
+        # If overlap is disabled, we fully reset the buffer.
         if overlap == 0:
             current = []
             current_words = 0
             return
 
-        # Keep the last `overlap` words as seed for the next chunk.
+        # Keep the last `overlap` words as the seed for the next chunk.
+        # This reduces answer boundary loss during retrieval (answers can span
+        # the end of one chunk and the start of the next).
         words = " ".join(current).split()
         tail = words[-overlap:] if len(words) >= overlap else words
         current = [" ".join(tail)] if tail else []
@@ -76,6 +79,8 @@ def chunk_text(text: str, chunk_size: int, overlap: int) -> List[str]:
         s_words = len(s.split())
         if s_words > chunk_size and not current:
             # Extremely long "sentence": hard-split by word budget.
+            # We only do this when the buffer is empty, so we don't interleave
+            # multiple sentences inside a single "sentence" chunk.
             words = s.split()
             i = 0
             while i < len(words):
@@ -83,10 +88,12 @@ def chunk_text(text: str, chunk_size: int, overlap: int) -> List[str]:
                 chunks.append(piece)
                 if i + chunk_size >= len(words):
                     break
+                # Advance by the remaining budget after overlap.
                 i += chunk_size - overlap if overlap > 0 else chunk_size
             continue
 
         if current_words + s_words > chunk_size and current:
+            # Buffer would overflow: commit the current chunk and start a new one.
             _flush()
 
         current.append(s)

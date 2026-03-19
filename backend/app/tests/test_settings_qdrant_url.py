@@ -1,25 +1,7 @@
-import importlib
-import sys
-
 import qdrant_client
 
 
-def _reload_settings_and_rag():
-    # settings are instantiated at import time, reload after env changes
-    if "app.settings" in sys.modules:
-        importlib.reload(sys.modules["app.settings"])
-    else:
-        import app.settings  # noqa: F401
-
-    if "app.rag" in sys.modules:
-        importlib.reload(sys.modules["app.rag"])
-    else:
-        import app.rag  # noqa: F401
-
-    return sys.modules["app.settings"], sys.modules["app.rag"]
-
-
-def test_qdrant_url_is_taken_from_env(monkeypatch):
+def test_qdrant_url_is_taken_from_env(monkeypatch, reload_settings_and_rag):
     # Force the qdrant store path to execute, but keep it offline by mocking QdrantClient.
     monkeypatch.setenv("VECTOR_STORE", "qdrant")
     monkeypatch.setenv("QDRANT_URL", "http://example-qdrant:6333")
@@ -38,7 +20,7 @@ def test_qdrant_url_is_taken_from_env(monkeypatch):
 
     monkeypatch.setattr(qdrant_client, "QdrantClient", _FakeClient)
 
-    _settings, rag = _reload_settings_and_rag()
+    _settings, rag = reload_settings_and_rag()
     _engine = rag.RAGEngine()
 
     assert seen["url"] == "http://example-qdrant:6333"

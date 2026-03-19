@@ -1,4 +1,4 @@
-import time, os, math, json, hashlib
+import time, os, math, json, hashlib, zlib
 from typing import List, Dict, Tuple
 import numpy as np
 from .constants import (
@@ -6,7 +6,10 @@ from .constants import (
     DEFAULT_EMBED_DIM,
     LOCAL_EMBEDDING_MODEL_NAME,
     OPENROUTER_BASE_URL,
+    QDRANT_DENSE_VECTOR_NAME,
+    QDRANT_SPARSE_VECTOR_NAME,
     QDRANT_TIMEOUT_S,
+    SPARSE_HASH_DIM,
 )
 from .settings import settings
 from .ingest import chunk_text, doc_hash
@@ -15,6 +18,28 @@ from qdrant_client import QdrantClient, models as qm
 # ---- Simple local embedder (deterministic) ----
 def _tokenize(s: str) -> List[str]:
     return [t.lower() for t in s.split()]
+
+def _sparse_encode(text: str) -> qm.SparseVector:
+    """
+    Produce a lightweight sparse vector for keyword-style matching.
+
+    We hash tokens into a fixed-sized index space (no external model required).
+    This is not a full BM25 implementation, but it captures exact-token signals
+    which complement dense semantic search in hybrid retrieval.
+    """
+    counts: Dict[int, float] = {}
+    for t in _tokenize(text):
+        if not t:
+            continue
+        idx = (zlib.adler32(t.encode("utf-8")) & 0xFFFFFFFF) % SPARSE_HASH_DIM
+        counts[idx] = counts.get(idx, 0.0) + 1.0
+
+    if not counts:
+        return qm.SparseVector(indices=[], values=[])
+
+    indices = sorted(counts.keys())
+    values = [float(counts[i]) for i in indices]
+    return qm.SparseVector(indices=indices, values=values)
 
 class LocalEmbedder:
     def __init__(self, dim: int = DEFAULT_EMBED_DIM):
@@ -97,7 +122,9 @@ class InMemoryStore:
             if h:
                 self._hashes.add(h)
 
-    def search(self, query: np.ndarray, k: int = 4) -> List[Tuple[float, Dict]]:
+    def search(
+        self, query: np.ndarray, k: int = 4, *, query_text: str | None = None
+    ) -> List[Tuple[float, Dict]]:
         if not self.vecs:
             return []
         A = np.vstack(self.vecs)  # [N, d]
@@ -108,6 +135,17 @@ class InMemoryStore:
         return [(float(sims[i]), self.meta[i]) for i in idx]
 
 class QdrantStore:
+    """
+    Qdrant-backed vector store supporting hybrid retrieval.
+
+    Hybrid mode stores both:
+    - a dense embedding in the `dense` vector
+    - a lightweight keyword/sparse vector in the `sparse` vector
+
+    Query-time hybrid retrieval uses Qdrant's `FusionQuery` with `Fusion.RRF`
+    to combine dense + sparse candidate sets in a rank-order stable way.
+    """
+
     def __init__(self, collection: str, dim: int = DEFAULT_EMBED_DIM):
         self.client = QdrantClient(url=settings.qdrant_url, timeout=QDRANT_TIMEOUT_S)
         self.collection = collection
@@ -115,28 +153,97 @@ class QdrantStore:
         self._ensure_collection()
 
     def _ensure_collection(self):
+        """
+        Ensure the Qdrant collection exists with the correct vector configs.
+
+        We recreate the collection if we can't read it (e.g. missing collection,
+        or dimension mismatch after a different embedding model is configured).
+        """
         try:
             self.client.get_collection(self.collection)
         except Exception:
             self.client.recreate_collection(
                 collection_name=self.collection,
-                vectors_config=qm.VectorParams(size=self.dim, distance=qm.Distance.COSINE)
+                vectors_config={
+                    QDRANT_DENSE_VECTOR_NAME: qm.VectorParams(
+                        size=self.dim, distance=qm.Distance.COSINE
+                    )
+                },
+                # Hybrid retrieval requires the `sparse` vector to exist as well.
+                sparse_vectors_config={QDRANT_SPARSE_VECTOR_NAME: qm.SparseVectorParams()},
             )
 
     def upsert(self, vectors: List[np.ndarray], metadatas: List[Dict]):
+        """
+        Upsert dense + sparse vectors and store retrieval payload.
+
+        Notes:
+        - `metadatas[i]["text"]` is used to build the sparse keyword signal.
+          This intentionally matches the "chunked" text, so retrieval uses
+          the same token boundaries we indexed.
+        - Qdrant point IDs must be either unsigned integers or UUIDs.
+          Our ingestion pipeline provides a deterministic 64-bit int `id`.
+        """
         points = []
         for i, (v, m) in enumerate(zip(vectors, metadatas)):
-            points.append(qm.PointStruct(id=m.get("id") or m.get("hash") or i, vector=v.tolist(), payload=m))
+            sparse = _sparse_encode(m.get("text", ""))
+            points.append(
+                qm.PointStruct(
+                    id=m.get("id") or m.get("hash") or i,
+                    vector={
+                        QDRANT_DENSE_VECTOR_NAME: v.tolist(),
+                        QDRANT_SPARSE_VECTOR_NAME: sparse,
+                    },
+                    payload=m,
+                )
+            )
         self.client.upsert(collection_name=self.collection, points=points)
 
-    def search(self, query: np.ndarray, k: int = 4) -> List[Tuple[float, Dict]]:
-        res = self.client.search(
-            collection_name=self.collection,
-            query_vector=query.tolist(),
-            limit=k,
-            with_payload=True
-        )
-        out = []
+    def search(self, query: np.ndarray, k: int = 4, *, query_text: str | None = None) -> List[Tuple[float, Dict]]:
+        """
+        Retrieve top-k chunks from Qdrant.
+
+        If `settings.hybrid_search_enabled` is true and `query_text` is provided,
+        we issue a single `query_points` request with two `prefetch` blocks:
+        - dense prefetch: dense embedding similarity
+        - sparse prefetch: hashed keyword signals
+
+        Qdrant's RRF (`Fusion.RRF`) then fuses candidates from both prefetch
+        streams into a final ranked list.
+        """
+        if settings.hybrid_search_enabled and query_text:
+            res = self.client.query_points(
+                collection_name=self.collection,
+                prefetch=[
+                    qm.Prefetch(
+                        query=query.tolist(),
+                        using=QDRANT_DENSE_VECTOR_NAME,
+                        # Pull more than k so fusion has enough candidates.
+                        limit=max(k * 4, 20),
+                    ),
+                    qm.Prefetch(
+                        query=_sparse_encode(query_text),
+                        using=QDRANT_SPARSE_VECTOR_NAME,
+                        # Same limit to keep dense/sparse candidate counts balanced.
+                        limit=max(k * 4, 20),
+                    ),
+                ],
+                # Reciprocal Rank Fusion is robust to score-scale differences between
+                # dense similarity and hashed sparse matching.
+                query=qm.FusionQuery(fusion=qm.Fusion.RRF),
+                limit=k,
+                with_payload=True,
+            ).points
+        else:
+            res = self.client.query_points(
+                collection_name=self.collection,
+                query=query.tolist(),
+                using=QDRANT_DENSE_VECTOR_NAME,
+                limit=k,
+                with_payload=True,
+            ).points
+
+        out: List[Tuple[float, Dict]] = []
         for r in res:
             out.append((float(r.score), dict(r.payload)))
         return out
@@ -234,6 +341,12 @@ class RAGEngine:
         self._chunk_count = 0
 
     def ingest_chunks(self, chunks: List[Dict]) -> Tuple[int, int]:
+        """
+        Embed and index all chunks.
+
+        Returns:
+            (new_docs_count, total_chunks_indexed)
+        """
         vectors = []
         metas = []
         doc_titles_before = set(self._doc_titles)
@@ -262,9 +375,15 @@ class RAGEngine:
         return (len(self._doc_titles) - len(doc_titles_before), len(metas))
 
     def retrieve(self, query: str, k: int = 4) -> List[Dict]:
+        """
+        Retrieve k relevant chunks for `query`.
+
+        We pass `query_text` down to the store so hybrid search can build
+        the sparse keyword vector at query-time.
+        """
         t0 = time.time()
         qv = self.embedder.embed(query)
-        results = self.store.search(qv, k=k)
+        results = self.store.search(qv, k=k, query_text=query)
         self.metrics.add_retrieval((time.time()-t0)*1000.0)
         return [meta for score, meta in results]
 
@@ -286,6 +405,16 @@ class RAGEngine:
 
 # ---- Helpers ----
 def build_chunks_from_docs(docs: List[Dict], chunk_size: int, overlap: int) -> List[Dict]:
+    """
+    Create chunk records while preserving section context.
+
+    For each source doc, we:
+    - sentence/word-budget chunk the `text`
+    - prefix each chunk with the doc's `section` header (if present)
+
+    This increases retrieval fidelity for policy-style documents where answers
+    often depend on the surrounding section heading.
+    """
     out = []
     for d in docs:
         section = (d.get("section") or "").strip()

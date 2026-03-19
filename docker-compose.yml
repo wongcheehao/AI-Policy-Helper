@@ -18,6 +18,7 @@ services:
       - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
       - VECTOR_STORE=${VECTOR_STORE:-qdrant}
       - COLLECTION_NAME=${COLLECTION_NAME:-policy_helper}
+      - HYBRID_SEARCH_ENABLED=${HYBRID_SEARCH_ENABLED:-true}
       # Defaults here must mirror backend/app/constants.py chunk defaults.
       - CHUNK_SIZE=${CHUNK_SIZE:-256}
       - CHUNK_OVERLAP=${CHUNK_OVERLAP:-40}
