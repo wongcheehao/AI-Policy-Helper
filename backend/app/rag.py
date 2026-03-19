@@ -156,12 +156,43 @@ class QdrantStore:
         """
         Ensure the Qdrant collection exists with the correct vector configs.
 
-        We recreate the collection if we can't read it (e.g. missing collection,
-        or dimension mismatch after a different embedding model is configured).
+        We recreate the collection if:
+        - it doesn't exist (or Qdrant rejects the request), or
+        - it doesn't match our expected schema:
+          - named dense vector called `dense`
+          - named sparse vector called `sparse`
+          - dense vector dimension matches `self.dim`
+
+        Why this matters:
+        - Docker uses a persistent `qdrant_data` volume between test runs.
+          If an older run created `policy_helper` with the *default* (unnamed)
+          vector config, then our upsert would fail with "Not existing vector name error: dense".
         """
         try:
-            self.client.get_collection(self.collection)
+            info = self.client.get_collection(self.collection)
         except Exception:
+            info = None
+
+        recreate = info is None
+        if info is not None:
+            params = getattr(getattr(info, "config", None), "params", None)
+            vectors = getattr(params, "vectors", None)
+            sparse_vectors = getattr(params, "sparse_vectors", None)
+
+            # Unnamed vectors are represented as a single VectorParams object.
+            dense_ok = (
+                isinstance(vectors, dict)
+                and QDRANT_DENSE_VECTOR_NAME in vectors
+                and int(getattr(vectors[QDRANT_DENSE_VECTOR_NAME], "size", -1)) == self.dim
+            )
+            sparse_ok = (
+                isinstance(sparse_vectors, dict)
+                and QDRANT_SPARSE_VECTOR_NAME in sparse_vectors
+            )
+
+            recreate = not (dense_ok and sparse_ok)
+
+        if recreate:
             self.client.recreate_collection(
                 collection_name=self.collection,
                 vectors_config={
@@ -211,42 +242,129 @@ class QdrantStore:
         Qdrant's RRF (`Fusion.RRF`) then fuses candidates from both prefetch
         streams into a final ranked list.
         """
-        if settings.hybrid_search_enabled and query_text:
-            res = self.client.query_points(
-                collection_name=self.collection,
-                prefetch=[
-                    qm.Prefetch(
-                        query=query.tolist(),
-                        using=QDRANT_DENSE_VECTOR_NAME,
-                        # Pull more than k so fusion has enough candidates.
-                        limit=max(k * 4, 20),
-                    ),
-                    qm.Prefetch(
-                        query=_sparse_encode(query_text),
-                        using=QDRANT_SPARSE_VECTOR_NAME,
-                        # Same limit to keep dense/sparse candidate counts balanced.
-                        limit=max(k * 4, 20),
-                    ),
-                ],
-                # Reciprocal Rank Fusion is robust to score-scale differences between
-                # dense similarity and hashed sparse matching.
-                query=qm.FusionQuery(fusion=qm.Fusion.RRF),
-                limit=k,
-                with_payload=True,
-            ).points
-        else:
-            res = self.client.query_points(
-                collection_name=self.collection,
-                query=query.tolist(),
-                using=QDRANT_DENSE_VECTOR_NAME,
-                limit=k,
-                with_payload=True,
-            ).points
+        # NOTE: we intentionally avoid `query_points + FusionQuery` here because
+        # `qdrant-client==1.9.2` (used by this repo) does not expose the
+        # corresponding Python model classes (`Prefetch`, `FusionQuery`, etc).
+        # Instead we:
+        # 1) run dense + sparse searches (top-N) via `search_batch()`
+        # 2) fuse them using Qdrant's reference RRF implementation
+        #    (`qdrant_client.hybrid.fusion.reciprocal_rank_fusion`)
 
-        out: List[Tuple[float, Dict]] = []
-        for r in res:
-            out.append((float(r.score), dict(r.payload)))
-        return out
+        if settings.hybrid_search_enabled and query_text:
+            candidate_limit = max(k * 4, 20)
+            dense_req = qm.SearchRequest(
+                vector=qm.NamedVector(name=QDRANT_DENSE_VECTOR_NAME, vector=query.tolist()),
+                limit=candidate_limit,
+                with_payload=True,
+            )
+            sparse_req = qm.SearchRequest(
+                vector=qm.NamedSparseVector(
+                    name=QDRANT_SPARSE_VECTOR_NAME, vector=_sparse_encode(query_text)
+                ),
+                limit=candidate_limit,
+                with_payload=True,
+            )
+
+            dense_resp, sparse_resp = self.client.search_batch(
+                collection_name=self.collection, requests=[dense_req, sparse_req]
+            )
+
+            from qdrant_client.hybrid.fusion import reciprocal_rank_fusion
+
+            fused = reciprocal_rank_fusion(
+                responses=[dense_resp, sparse_resp], limit=k
+            )
+            return [(float(p.score), dict(p.payload)) for p in fused]
+
+        # Dense-only retrieval (named vector) for when hybrid is disabled.
+        dense_only = self.client.search(
+            collection_name=self.collection,
+            query_vector=qm.NamedVector(name=QDRANT_DENSE_VECTOR_NAME, vector=query.tolist()),
+            limit=k,
+            with_payload=True,
+        )
+        return [(float(p.score), dict(p.payload)) for p in dense_only]
+
+# ---- Reranking (post-retrieval) ----
+class StubReranker:
+    """
+    Deterministic, offline-friendly reranker.
+
+    Purpose:
+    - Reorder retrieved chunks by a cheap query<->chunk token-overlap signal.
+    - Keep behavior stable for tests and local development (no model downloads).
+
+    Scoring:
+    - Tokenize the query and count how many of those tokens appear in the chunk.
+    - Tie-break using the original candidate order to keep results stable.
+    """
+
+    def rerank(
+        self, query: str, candidates: List[Tuple[float, Dict]]
+    ) -> List[Tuple[float, Dict]]:
+        q_tokens = _tokenize(query)
+        if not q_tokens:
+            # Nothing to match: preserve original order.
+            return candidates
+
+        q_set = set(q_tokens)
+
+        def _score(meta: Dict) -> float:
+            passage = meta.get("text", "") or ""
+            p_tokens = set(_tokenize(passage))
+            # Count query tokens (including duplicates in the query) that appear in the passage.
+            return float(sum(1 for t in q_tokens if t in p_tokens))
+
+        scored: List[Tuple[float, int, Dict]] = []
+        for i, (_initial_score, meta) in enumerate(candidates):
+            scored.append((_score(meta), i, meta))
+
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        return [(float(score), meta) for score, _i, meta in scored]
+
+
+class CrossEncoderReranker:
+    """
+    Cross-encoder reranker using Sentence Transformers.
+
+    Unlike bi-encoders (used for dense embeddings), CrossEncoders score each
+    (query, passage) pair jointly, which often yields better relevance ordering
+    but is heavier/slower.
+
+    This class uses *lazy imports* so the app can run in stub-first mode even
+    if `sentence_transformers` / CrossEncoder weights are not available.
+    """
+
+    def __init__(self, model_name: str):
+        try:
+            from sentence_transformers import CrossEncoder  # optional heavy dependency
+        except ImportError as e:
+            raise RuntimeError(
+                "CrossEncoder reranking requires sentence-transformers. "
+                "Install with `pip install -U sentence-transformers` or set "
+                "RERANKING_BACKEND=stub to keep offline stub-first behavior."
+            ) from e
+
+        self.model_name = model_name
+        self.model = CrossEncoder(model_name)
+
+    def rerank(
+        self, query: str, candidates: List[Tuple[float, Dict]]
+    ) -> List[Tuple[float, Dict]]:
+        passages = [meta.get("text", "") or "" for _score, meta in candidates]
+        pairs = [(query, p) for p in passages]
+
+        # SentenceTransformers returns array-like scores aligned with `pairs`.
+        raw_scores = self.model.predict(pairs)
+        scores = [float(s) for s in raw_scores]
+
+        scored: List[Tuple[float, int, Dict]] = []
+        for i, ((initial_score, meta), s) in enumerate(zip(candidates, scores)):
+            scored.append((s, i, meta))
+
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        return [(float(score), meta) for score, _i, meta in scored]
+
 
 # ---- LLM provider ----
 class StubLLM:
