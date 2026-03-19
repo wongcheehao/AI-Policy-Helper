@@ -10,8 +10,6 @@ import {
   Brain,
   RefreshCw,
   Sparkles,
-  ChevronDown,
-  ChevronUp,
   BookOpen,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -57,7 +55,6 @@ function toCitation(
 export default function PolicyHelper() {
   const [messages, setMessages] = useState<Message[]>([])
   const [isLoading, setIsLoading] = useState(false)
-  const [showAdmin, setShowAdmin] = useState(false)
   const [isIngesting, setIsIngesting] = useState(false)
   const [metrics, setMetrics] = useState<Metrics>({
     total_docs: 0,
@@ -188,7 +185,7 @@ export default function PolicyHelper() {
     <div className="min-h-screen bg-background">
       {/* Header */}
       <header className="sticky top-0 z-50 border-b border-border/50 bg-background/80 backdrop-blur-sm">
-        <div className="max-w-5xl mx-auto px-4 py-4">
+        <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-lg bg-primary/20 flex items-center justify-center">
@@ -199,98 +196,20 @@ export default function PolicyHelper() {
                 <p className="text-xs text-muted-foreground">AI-powered policy & product helper</p>
               </div>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setShowAdmin(!showAdmin)}
-              className="gap-2"
-            >
-              <Database className="w-4 h-4" />
-              Admin
-              {showAdmin ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-            </Button>
+            <div className="text-xs text-muted-foreground hidden sm:block">
+              Docs: <span className="text-foreground font-medium">{metrics.total_docs}</span> · Chunks:{" "}
+              <span className="text-foreground font-medium">{metrics.total_chunks}</span>
+            </div>
           </div>
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto px-4 py-6">
-        {/* Admin Panel */}
-        {showAdmin && (
-          <Card className="mb-6 bg-card border-border/50">
-            <CardHeader className="pb-4">
-              <CardTitle className="flex items-center gap-2 text-base">
-                <Database className="w-4 h-4 text-primary" />
-                System Dashboard
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              {/* Metrics Grid */}
-              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-                <MetricsCard
-                  label="Documents"
-                  value={metrics.total_docs}
-                  icon={<FileText className="w-5 h-5" />}
-                />
-                <MetricsCard
-                  label="Chunks"
-                  value={metrics.total_chunks}
-                  icon={<Database className="w-5 h-5" />}
-                />
-                <MetricsCard
-                  label="Retrieval"
-                  value={`${metrics.avg_retrieval_latency_ms}ms`}
-                  icon={<Zap className="w-5 h-5" />}
-                  trend={metrics.avg_retrieval_latency_ms > 50 ? "down" : "up"}
-                />
-                <MetricsCard
-                  label="Generation"
-                  value={`${metrics.avg_generation_latency_ms}ms`}
-                  icon={<Clock className="w-5 h-5" />}
-                  trend={metrics.avg_generation_latency_ms > 300 ? "down" : "up"}
-                />
-                <MetricsCard
-                  label="Embedding"
-                  value={metrics.embedding_model}
-                  icon={<Cpu className="w-5 h-5" />}
-                />
-                <MetricsCard
-                  label="LLM"
-                  value={metrics.llm_model}
-                  icon={<Brain className="w-5 h-5" />}
-                />
-              </div>
-
-              {/* Actions */}
-              <div className="flex flex-wrap gap-3">
-                <Button
-                  onClick={handleIngestDocs}
-                  disabled={isIngesting}
-                  className="gap-2 bg-primary hover:bg-primary/90 text-primary-foreground"
-                >
-                  {isIngesting ? (
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Database className="w-4 h-4" />
-                  )}
-                  {isIngesting ? "Ingesting..." : "Ingest Sample Docs"}
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={handleRefreshMetrics}
-                  className="gap-2"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                  Refresh Metrics
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Chat Area */}
-        <div className="flex flex-col h-[calc(100vh-200px)]">
-          {/* Messages */}
-          <div className="flex-1 overflow-y-auto space-y-4 pb-4">
+      <main className="max-w-7xl mx-auto px-4 py-6">
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
+          {/* Chat Area */}
+          <div className="flex flex-col min-h-[calc(100vh-180px)]">
+            {/* Messages */}
+            <div className="flex-1 overflow-y-auto space-y-4 pb-4">
             {messages.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-center py-12">
                 <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mb-4">
@@ -339,15 +258,89 @@ export default function PolicyHelper() {
               </>
             )}
             <div ref={messagesEndRef} />
+            </div>
+
+            {/* Input */}
+            <div className="pt-4 border-t border-border/50">
+              <ChatInput onSend={handleSend} isLoading={isLoading} />
+              <p className="text-xs text-muted-foreground text-center mt-2">
+                Responses are generated from your ingested documents with source citations
+              </p>
+            </div>
           </div>
 
-          {/* Input */}
-          <div className="pt-4 border-t border-border/50">
-            <ChatInput onSend={handleSend} isLoading={isLoading} />
-            <p className="text-xs text-muted-foreground text-center mt-2">
-              Responses are generated from your ingested documents with source citations
-            </p>
-          </div>
+          {/* Admin Sidebar */}
+          <aside className="lg:sticky lg:top-[88px] h-fit">
+            <Card className="bg-card border-border/50">
+              <CardHeader className="pb-4">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Database className="w-4 h-4 text-primary" />
+                  System Dashboard
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                {/* Metrics Grid */}
+                <div className="grid grid-cols-2 gap-3">
+                  <MetricsCard
+                    label="Documents"
+                    value={metrics.total_docs}
+                    icon={<FileText className="w-5 h-5" />}
+                  />
+                  <MetricsCard
+                    label="Chunks"
+                    value={metrics.total_chunks}
+                    icon={<Database className="w-5 h-5" />}
+                  />
+                  <MetricsCard
+                    label="Retrieval"
+                    value={`${metrics.avg_retrieval_latency_ms}ms`}
+                    icon={<Zap className="w-5 h-5" />}
+                    trend={metrics.avg_retrieval_latency_ms > 50 ? "down" : "up"}
+                  />
+                  <MetricsCard
+                    label="Generation"
+                    value={`${metrics.avg_generation_latency_ms}ms`}
+                    icon={<Clock className="w-5 h-5" />}
+                    trend={metrics.avg_generation_latency_ms > 300 ? "down" : "up"}
+                  />
+                  <MetricsCard
+                    label="Embedding"
+                    value={metrics.embedding_model}
+                    icon={<Cpu className="w-5 h-5" />}
+                  />
+                  <MetricsCard
+                    label="LLM"
+                    value={metrics.llm_model}
+                    icon={<Brain className="w-5 h-5" />}
+                  />
+                </div>
+
+                {/* Actions */}
+                <div className="flex flex-col gap-3">
+                  <Button
+                    onClick={handleIngestDocs}
+                    disabled={isIngesting}
+                    className="gap-2 bg-primary hover:bg-primary/90 text-primary-foreground"
+                  >
+                    {isIngesting ? (
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Database className="w-4 h-4" />
+                    )}
+                    {isIngesting ? "Ingesting..." : "Ingest Sample Docs"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={handleRefreshMetrics}
+                    className="gap-2"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    Refresh Metrics
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </aside>
         </div>
       </main>
     </div>
