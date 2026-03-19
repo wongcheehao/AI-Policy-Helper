@@ -182,10 +182,10 @@ export default function PolicyHelper() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="h-dvh bg-background flex flex-col overflow-hidden">
       {/* Header */}
-      <header className="sticky top-0 z-50 border-b border-border/50 bg-background/80 backdrop-blur-sm">
-        <div className="max-w-7xl mx-auto px-4 py-4">
+      <header className="z-50 border-b border-border/50 bg-background/80 backdrop-blur-sm">
+        <div className="w-full px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-lg bg-primary/20 flex items-center justify-center">
@@ -204,12 +204,12 @@ export default function PolicyHelper() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 py-6">
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
+      <main className="w-full flex-1 min-h-0 overflow-hidden">
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-4 h-full min-h-0 p-4">
           {/* Chat Area */}
-          <div className="flex flex-col min-h-[calc(100vh-180px)]">
+          <div className="flex flex-col h-full min-h-0">
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto space-y-4 pb-4">
+            <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pb-4">
             {messages.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-center py-12">
                 <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mb-4">
@@ -270,7 +270,7 @@ export default function PolicyHelper() {
           </div>
 
           {/* Admin Sidebar */}
-          <aside className="lg:sticky lg:top-[88px] h-fit">
+          <aside className="h-fit lg:h-full lg:min-h-0 lg:overflow-y-auto">
             <Card className="bg-card border-border/50">
               <CardHeader className="pb-4">
                 <CardTitle className="flex items-center gap-2 text-base">
