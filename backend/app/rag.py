@@ -316,6 +316,10 @@ class StubReranker:
 
         def _score(meta: Dict) -> float:
             passage = meta.get("text", "") or ""
+            # Critical fix: Penalize contexts with no text content
+            # This prevents empty source blocks from being sent to the LLM
+            if not passage.strip():
+                return -999.0
             p_tokens = set(_tokenize(passage))
             # Count query tokens (including duplicates in the query) that appear in the passage.
             return float(sum(1 for t in q_tokens if t in p_tokens))
@@ -364,7 +368,12 @@ class CrossEncoderReranker:
         scores = [float(s) for s in raw_scores]
 
         scored: List[Tuple[float, int, Dict]] = []
-        for i, ((initial_score, meta), s) in enumerate(zip(candidates, scores)):
+        for i, ((_initial_score, meta), s) in enumerate(zip(candidates, scores)):
+            # Critical fix: Penalize contexts with no text content
+            # This prevents empty source blocks from being sent to the LLM
+            text = meta.get("text", "") or ""
+            if not text.strip():
+                s = -999.0
             scored.append((s, i, meta))
 
         scored.sort(key=lambda x: (-x[0], x[1]))
@@ -458,6 +467,24 @@ class OpenRouterLLM:
 
     def generate(self, query: str, contexts: List[Dict]) -> str:
         prompt = self._build_user_prompt(query, contexts)
+        # Debug: log context details
+        text_lengths = [len(c.get("text", "") or "") for c in contexts]
+        context_info = [
+            {
+                "title": c.get("title"),
+                "section": c.get("section"),
+                "text_length": len(c.get("text", "") or ""),
+                "has_text": bool((c.get("text", "") or "").strip()),
+            }
+            for c in contexts
+        ]
+        logger.info(
+            "openrouter.generate query_len=%s contexts=%s text_lengths=%s context_info=%s",
+            len(query),
+            len(contexts),
+            text_lengths,
+            context_info,
+        )
         resp = self.client.chat.completions.create(
             model=self.model,
             messages=[
@@ -475,6 +502,19 @@ class OpenRouterLLM:
         Yields incremental text deltas (strings).
         """
         user_prompt = self._build_user_prompt(query, contexts)
+
+        # Debug: log context details for streaming
+        text_lengths = [len(c.get("text", "") or "") for c in contexts]
+        has_text = [bool((c.get("text", "") or "").strip()) for c in contexts]
+        prompt_len = len(user_prompt)
+        logger.warning(
+            "openrouter.generate_stream query_len=%s contexts=%s text_lengths=%s has_text=%s prompt_len=%s",
+            len(query),
+            len(contexts),
+            text_lengths,
+            has_text,
+            prompt_len,
+        )
 
         try:
             stream = self.client.chat.completions.create(
@@ -556,12 +596,29 @@ class RAGEngine:
             self.llm_name = "stub"
         logger.info("rag.llm selected=%s", self.llm_name)
 
+        # Reranker selection
+        self.reranker = self._build_reranker()
+        logger.info("rag.reranker selected=%s", settings.reranking_backend)
+
         self.metrics = Metrics()
         self._doc_titles = set()
         self._chunk_count = 0
         # In-process dedup set used to make repeated `/api/ingest` calls idempotent
         # for the same running server (common during UI testing).
         self._chunk_hashes = set()
+
+    def _build_reranker(self):
+        """Select reranking backend based on configuration."""
+        if settings.reranking_backend == "cross-encoder":
+            try:
+                return CrossEncoderReranker(model_name=settings.reranking_model)
+            except Exception as e:
+                logger.warning(
+                    "rag.reranker.fallback backend=cross-encoder err=%s, using stub",
+                    type(e).__name__,
+                )
+                return StubReranker()
+        return StubReranker()
 
     def ingest_chunks(self, chunks: List[Dict]) -> Tuple[int, int]:
         """
@@ -608,18 +665,46 @@ class RAGEngine:
 
     def retrieve(self, query: str, k: int = 4) -> List[Dict]:
         """
-        Retrieve k relevant chunks for `query`.
+        Retrieve k relevant chunks for `query`, with optional reranking.
+
+        Pipeline:
+        1. Retrieve candidate_limit * 2 results from vector store (dense + sparse)
+        2. Rerank candidates using the configured reranker
+        3. Return top-k after reranking
 
         We pass `query_text` down to the store so hybrid search can build
         the sparse keyword vector at query-time.
         """
         t0 = time.time()
         qv = self.embedder.embed(query)
-        results = self.store.search(qv, k=k, query_text=query)
+
+        # Retrieve more candidates than needed so reranking has material to work with
+        candidate_limit = max(k * 2, 10)
+        results = self.store.search(qv, k=candidate_limit, query_text=query)
+        candidates = [(score, meta) for score, meta in results]
+
+        # Rerank candidates and keep top-k
+        if self.reranker and candidates:
+            reranked = self.reranker.rerank(query, candidates)
+            # Filter out results with score <= -999 (penalty for empty text)
+            # and keep only the top-k valid results
+            valid_results = [(score, meta) for score, meta in reranked if score > -999.0]
+            results = valid_results[:k] if valid_results else reranked[:k]
+            logger.debug(
+                "rag.retrieve k=%s candidates=%s reranked=%s valid=%s ms=%.2f",
+                k,
+                len(candidates),
+                len(reranked),
+                len(valid_results),
+                (time.time() - t0) * 1000.0,
+            )
+        else:
+            results = candidates[:k]
+
         elapsed_ms = (time.time() - t0) * 1000.0
         self.metrics.add_retrieval(elapsed_ms)
         logger.debug("rag.retrieve k=%s results=%s ms=%.2f", k, len(results), elapsed_ms)
-        return [meta for score, meta in results]
+        return [meta for _score, meta in results]
 
     def generate(self, query: str, contexts: List[Dict]) -> str:
         t0 = time.time()

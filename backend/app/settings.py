@@ -24,5 +24,7 @@ class Settings(BaseModel):
     chunk_size: int = int(os.getenv("CHUNK_SIZE", str(DEFAULT_CHUNK_SIZE_WORDS)))
     chunk_overlap: int = int(os.getenv("CHUNK_OVERLAP", str(DEFAULT_CHUNK_OVERLAP_WORDS)))
     data_dir: str = os.getenv("DATA_DIR", "/app/data")
+    reranking_backend: str = os.getenv("RERANKING_BACKEND", "stub")  # stub | cross-encoder
+    reranking_model: str = os.getenv("RERANKING_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
 
 settings = Settings()

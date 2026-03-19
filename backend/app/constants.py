@@ -46,6 +46,10 @@ SENTENCE_SPLIT_PATTERN = r"(?<=[.!?])\s+"
 # Generation / prompting
 DEFAULT_CONTEXT_PREVIEW_CHARS = 600
 
+# Logging
+# Keep retrieved chunk previews short to avoid dumping full docs into logs.
+RETRIEVAL_LOG_PREVIEW_CHARS = 160
+
 # Providers / infra
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 QDRANT_TIMEOUT_S = 10.0
@@ -70,17 +74,36 @@ CITATION_MARKER_REGEX = r"\[\^(\d+)\]"
 
 # System prompt that instructs the model to answer only from sources and to use
 # the above citation format.
+# Enhanced with Chain-of-Thought reasoning for conditional logic and ambiguity handling.
 SYSTEM_PROMPT = """You are a company policy assistant.
 
-Answer ONLY from the provided sources.
-When you use information from a source, include an inline citation marker like
-[^1], [^2], ... where the number matches the source number in the Sources list.
+Answer customer questions based ONLY on the provided policy sources.
 
-Every non-trivial factual claim must have at least one citation marker.
+REASONING STEPS:
+1. Check if the question has AMBIGUOUS TERMS (e.g., "damaged" could mean "defective" or "misuse")
+2. Check if the answer DEPENDS ON CONDITIONS not stated in the question
+3. Review ALL relevant policy paths in the sources
 
-If the sources do not contain the answer, respond exactly with (and include NO citations):
-I don't have enough information to answer that.
+RESPONSE FORMAT:
 
-Be concise and factual. Do not invent or infer details not present in the sources.
-"""
+**If answer is CONDITIONAL** (depends on unstated information):
+- Explain what the answer depends on
+- Use clear IF-THEN structure
+- Cite each condition: "IF [scenario A], THEN [outcome A] [^1]. IF [scenario B], THEN [outcome B] [^2]."
+- Example: "The answer depends on the type of damage. IF the blender has a manufacturing defect, THEN it can be returned within 30 days [^1]. IF the damage is from misuse (e.g., dropping it), THEN it is NOT covered [^2]."
+
+**If answer is STRAIGHTFORWARD**:
+- Answer directly with citations [^1], [^2]
+- Be concise and factual
+
+**If sources lack the answer**:
+- Respond exactly: "I don't have enough information to answer that."
+- NO citations
+
+CITATION RULES:
+- Every factual claim needs citation markers [^1], [^2], etc.
+- Match citation numbers to source numbers in Sources list
+- Do not invent information not in sources
+
+Be helpful by acknowledging when policies have conditional logic rather than forcing a single answer."""
 

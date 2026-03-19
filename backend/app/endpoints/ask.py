@@ -8,6 +8,7 @@ from starlette.responses import StreamingResponse
 
 from ..citations import filter_ctx_by_citations
 from ..constants import DEFAULT_TOP_K
+from ..constants import RETRIEVAL_LOG_PREVIEW_CHARS
 from ..deps import get_engine, logger
 from ..models import AskRequest, AskResponse, Citation, Chunk
 from ..rag import RAGEngine
@@ -27,6 +28,23 @@ def ask(req: AskRequest, engine: RAGEngine = Depends(get_engine)):
     t_retrieval0 = time.time()
     ctx = engine.retrieve(req.query, k=req.k or DEFAULT_TOP_K)
     retrieval_ms = (time.time() - t_retrieval0) * 1000.0
+    # Log retrieved context at INFO so it's visible in default LOG_LEVEL=INFO runs.
+    ctx_summaries = [
+        {
+            "i": i,
+            "title": (c.get("title") or ""),
+            "section": (c.get("section") or ""),
+            "preview": ((c.get("text") or "")[:RETRIEVAL_LOG_PREVIEW_CHARS]).replace("\n", " "),
+        }
+        for i, c in enumerate(ctx, start=1)
+    ]
+    logger.info(
+        "ask.ctx id=%s retrieved=%s ms=%.2f ctx=%s",
+        request_id,
+        len(ctx),
+        retrieval_ms,
+        ctx_summaries,
+    )
     logger.debug(
         "ask.retrieved id=%s ctx=%s ms=%.2f sources=%s",
         request_id,
@@ -80,6 +98,22 @@ def ask_stream(req: AskRequest, engine: RAGEngine = Depends(get_engine)):
     t_retrieval0 = time.time()
     ctx = engine.retrieve(req.query, k=req.k or DEFAULT_TOP_K)
     retrieval_ms = (time.time() - t_retrieval0) * 1000.0
+    ctx_summaries = [
+        {
+            "i": i,
+            "title": (c.get("title") or ""),
+            "section": (c.get("section") or ""),
+            "preview": ((c.get("text") or "")[:RETRIEVAL_LOG_PREVIEW_CHARS]).replace("\n", " "),
+        }
+        for i, c in enumerate(ctx, start=1)
+    ]
+    logger.info(
+        "ask_stream.ctx id=%s retrieved=%s ms=%.2f ctx=%s",
+        request_id,
+        len(ctx),
+        retrieval_ms,
+        ctx_summaries,
+    )
     logger.debug(
         "ask_stream.retrieved id=%s ctx=%s ms=%.2f sources=%s",
         request_id,
@@ -91,6 +125,18 @@ def ask_stream(req: AskRequest, engine: RAGEngine = Depends(get_engine)):
     def event_generator():
         t_gen0 = time.time()
         answer_parts: List[str] = []
+
+        # Debug: log what's actually in ctx before streaming
+        ctx_debug = [
+            {
+                "title": c.get("title"),
+                "section": c.get("section"),
+                "text_len": len(c.get("text", "") or ""),
+            }
+            for c in ctx
+        ]
+        logger.warning("ask_stream.event_generator ctx_debug=%s", ctx_debug)
+
         try:
             for token in engine.generate_stream(req.query, ctx):
                 answer_parts.append(token)

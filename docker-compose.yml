@@ -22,6 +22,8 @@ services:
       # Defaults here must mirror backend/app/constants.py chunk defaults.
       - CHUNK_SIZE=${CHUNK_SIZE:-256}
       - CHUNK_OVERLAP=${CHUNK_OVERLAP:-40}
+      - RERANKING_BACKEND=${RERANKING_BACKEND:-stub}
+      - RERANKING_MODEL=${RERANKING_MODEL:-cross-encoder/ms-marco-MiniLM-L-6-v2}
     volumes:
       - ./data:/app/data:ro
     ports:
