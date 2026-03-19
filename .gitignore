@@ -1,0 +1,36 @@
+# macOS
+.DS_Store
+
+# Environment variables (keep example files)
+.env
+.env.*
+!.env.example
+
+# Frontend environment variables (Next.js)
+frontend/.env
+frontend/.env.*
+
+# Local shell/python/system history snapshots (may contain secrets)
+.history/
+
+# Private keys / certs
+*.pem
+*.key
+*.crt
+*.cer
+*.der
+*.pfx
+*.p12
+
+# Credential / token files
+credentials*.json
+service-account*.json
+*.token
+*.secret
+*.jwt
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
