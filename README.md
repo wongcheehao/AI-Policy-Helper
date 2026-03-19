@@ -18,6 +18,15 @@ docker compose up --build
 - Backend docs: `http://localhost:8000/docs`
 - Qdrant UI: `http://localhost:6333`
 
+## Run with Makefile (convenience)
+
+```bash
+make dev   # docker compose up --build
+make test  # pytest (backend container)
+make fmt   # black app (backend container)
+make fix   # ruff check . --fix (host .venv)
+```
+
 Ingest sample docs:
 
 ```bash
