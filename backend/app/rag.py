@@ -1,7 +1,7 @@
 import time
 import hashlib
 import zlib
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Iterator
 import numpy as np
 from .constants import (
     CITATION_BRACKET_FORMAT,
@@ -388,6 +388,18 @@ class StubLLM:
         )
         return "\n".join(lines)
 
+    def generate_stream(self, query: str, contexts: List[Dict]) -> List[str]:
+        """
+        Deterministic streaming for offline stub mode.
+
+        We do not attempt true tokenization; instead we slice the full stub
+        response into fixed-size text chunks so the frontend can animate the
+        response incrementally.
+        """
+        full = self.generate(query, contexts)
+        chunk_size = 25
+        return [full[i : i + chunk_size] for i in range(0, len(full), chunk_size)]
+
 class OpenRouterLLM:
     def __init__(self, api_key: str, model: str = "openai/gpt-4o-mini"):
         from openai import OpenAI
@@ -397,7 +409,15 @@ class OpenRouterLLM:
         )
         self.model = model
 
-    def generate(self, query: str, contexts: List[Dict]) -> str:
+    def _build_user_prompt(self, query: str, contexts: List[Dict]) -> str:
+        """
+        Build the user prompt containing:
+        - the question
+        - numbered sources with chunk text
+
+        This is shared by both `generate()` and `generate_stream()` so their
+        grounding behavior stays consistent.
+        """
         sources_lines: List[str] = []
         for i, c in enumerate(contexts, start=1):
             title = c.get("title") or "Untitled"
@@ -415,7 +435,7 @@ class OpenRouterLLM:
                 )
             )
 
-        prompt = "\n".join(
+        return "\n".join(
             [
                 f"Question: {query}",
                 "",
@@ -423,6 +443,9 @@ class OpenRouterLLM:
                 "\n".join(sources_lines),
             ]
         )
+
+    def generate(self, query: str, contexts: List[Dict]) -> str:
+        prompt = self._build_user_prompt(query, contexts)
         resp = self.client.chat.completions.create(
             model=self.model,
             messages=[
@@ -432,6 +455,38 @@ class OpenRouterLLM:
             temperature=0.1
         )
         return resp.choices[0].message.content
+
+    def generate_stream(self, query: str, contexts: List[Dict]) -> Iterator[str]:
+        """
+        Stream generation via OpenRouter's OpenAI-compatible API.
+
+        Yields incremental text deltas (strings).
+        """
+        user_prompt = self._build_user_prompt(query, contexts)
+
+        try:
+            stream = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.1,
+                stream=True,
+            )
+
+            for event in stream:
+                delta = (
+                    event.choices[0].delta.content
+                    if event.choices and event.choices[0].delta
+                    else None
+                )
+                if delta:
+                    yield str(delta)
+        except Exception:
+            # If streaming fails for any reason (network, API mismatch, etc.),
+            # fall back to returning the full non-streamed answer.
+            yield self.generate(query, contexts)
 
 # ---- RAG Orchestrator & Metrics ----
 class Metrics:
@@ -537,6 +592,31 @@ class RAGEngine:
         answer = self.llm.generate(query, contexts)
         self.metrics.add_generation((time.time()-t0)*1000.0)
         return answer
+
+    def generate_stream(self, query: str, contexts: List[Dict]):
+        """
+        Stream generation while recording end-to-end generation latency.
+        """
+        t0 = time.time()
+        try:
+            generate_fn = getattr(self.llm, "generate_stream", None)
+            if generate_fn is None:
+                # Defensive fallback (should not happen for our built-in LLMs).
+                yield self.llm.generate(query, contexts)
+                return
+
+            # StubLLM returns a list of chunks; OpenRouterLLM yields incrementally.
+            streamed = generate_fn(query, contexts)
+            if isinstance(streamed, list):
+                for chunk in streamed:
+                    if chunk:
+                        yield chunk
+            else:
+                for chunk in streamed:
+                    if chunk:
+                        yield chunk
+        finally:
+            self.metrics.add_generation((time.time() - t0) * 1000.0)
 
     def stats(self) -> Dict:
         m = self.metrics.summary()
