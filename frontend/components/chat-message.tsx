@@ -26,30 +26,56 @@ export interface ChatMessageProps {
 }
 
 const markdownComponents = {
-  h1: (props: any) => (
-    <h1 className="text-base font-semibold mt-3 mb-2" {...props} />
+  h1: ({ children, ...props }: any) => (
+    <h1 className="text-base font-semibold mt-3 mb-2" {...props}>
+      {children}
+    </h1>
   ),
-  h2: (props: any) => (
-    <h2 className="text-sm font-semibold mt-3 mb-2" {...props} />
+  h2: ({ children, ...props }: any) => (
+    <h2 className="text-sm font-semibold mt-3 mb-2" {...props}>
+      {children}
+    </h2>
   ),
-  h3: (props: any) => (
-    <h3 className="text-sm font-semibold mt-3 mb-2" {...props} />
+  h3: ({ children, ...props }: any) => (
+    <h3 className="text-sm font-semibold mt-3 mb-2" {...props}>
+      {children}
+    </h3>
   ),
-  p: (props: any) => <p className="text-sm leading-relaxed mb-2" {...props} />,
-  ul: (props: any) => <ul className="list-disc pl-5 mb-2" {...props} />,
-  ol: (props: any) => <ol className="list-decimal pl-5 mb-2" {...props} />,
-  li: (props: any) => <li className="mb-1" {...props} />,
-  code: (props: any) => (
+  p: ({ children, ...props }: any) => (
+    <p className="text-sm leading-relaxed mb-2" {...props}>
+      {children}
+    </p>
+  ),
+  ul: ({ children, ...props }: any) => (
+    <ul className="list-disc pl-5 mb-2" {...props}>
+      {children}
+    </ul>
+  ),
+  ol: ({ children, ...props }: any) => (
+    <ol className="list-decimal pl-5 mb-2" {...props}>
+      {children}
+    </ol>
+  ),
+  li: ({ children, ...props }: any) => (
+    <li className="mb-1" {...props}>
+      {children}
+    </li>
+  ),
+  code: ({ children, ...props }: any) => (
     <code
       className="px-1 py-0.5 rounded bg-muted/50 font-mono text-[12px]"
       {...props}
-    />
+    >
+      {children}
+    </code>
   ),
-  pre: (props: any) => (
+  pre: ({ children, ...props }: any) => (
     <pre
       className="p-3 rounded-md bg-muted/50 overflow-x-auto text-[12px] leading-relaxed"
       {...props}
-    />
+    >
+      {children}
+    </pre>
   ),
 }
 
