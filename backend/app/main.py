@@ -5,13 +5,13 @@ import json
 import logging
 import time
 import uuid
-import re
 from typing import List
 from .models import IngestResponse, AskRequest, AskResponse, MetricsResponse, Citation, Chunk
 from .settings import settings
 from .constants import DEFAULT_TOP_K
 from .ingest import load_documents
 from .rag import RAGEngine, build_chunks_from_docs
+from .citations import filter_ctx_by_citations
 
 logging.basicConfig(
     level=getattr(logging, (settings.log_level or "INFO").upper(), logging.INFO),
@@ -33,53 +33,6 @@ app.add_middleware(
 )
 
 engine = RAGEngine()
-
-_CITATION_MARKER_RE = re.compile(r"\[\^(\d+)\]")
-_NO_INFO_ANSWER = "I don't have enough information to answer that."
-
-
-def _extract_cited_source_ids(answer: str) -> List[int]:
-    """
-    Extract 1-based numeric citation markers (e.g. [^1]) from an answer.
-    Returns unique ids in order of first appearance.
-    """
-    if not answer:
-        return []
-    seen = set()
-    out: List[int] = []
-    for m in _CITATION_MARKER_RE.finditer(answer):
-        try:
-            n = int(m.group(1))
-        except Exception:
-            continue
-        if n <= 0 or n in seen:
-            continue
-        seen.add(n)
-        out.append(n)
-    return out
-
-
-def _filter_ctx_by_citations(answer: str, ctx: List[dict]) -> List[dict]:
-    """
-    Make the backend authoritative about citations:
-    - If the model refuses with the exact refusal string, return no sources.
-    - Otherwise, return only ctx entries that were actually cited via [^n].
-    """
-    normalized = (answer or "").strip().replace("\n", " ")
-    normalized = " ".join(normalized.split())
-    if normalized == _NO_INFO_ANSWER:
-        return []
-
-    cited_ids = _extract_cited_source_ids(answer or "")
-    if not cited_ids:
-        return []
-
-    selected: List[dict] = []
-    for n in cited_ids:
-        i = n - 1
-        if 0 <= i < len(ctx):
-            selected.append(ctx[i])
-    return selected
 
 
 @app.get("/api/health")
@@ -130,7 +83,7 @@ def ask(req: AskRequest):
         retrieval_ms,
         generation_ms,
     )
-    cited_ctx = _filter_ctx_by_citations(answer, ctx)
+    cited_ctx = filter_ctx_by_citations(answer, ctx)
     citations = [Citation(title=c.get("title"), section=c.get("section")) for c in cited_ctx]
     chunks = [Chunk(title=c.get("title"), section=c.get("section"), text=c.get("text")) for c in cited_ctx]
     return AskResponse(
@@ -194,7 +147,7 @@ def ask_stream(req: AskRequest):
                 retrieval_ms,
                 generation_ms,
             )
-            cited_ctx = _filter_ctx_by_citations(full_answer, ctx)
+            cited_ctx = filter_ctx_by_citations(full_answer, ctx)
             citations = [Citation(title=c.get("title"), section=c.get("section")) for c in cited_ctx]
             chunks = [Chunk(title=c.get("title"), section=c.get("section"), text=c.get("text")) for c in cited_ctx]
             payload = {

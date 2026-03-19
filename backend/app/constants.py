@@ -62,6 +62,12 @@ QDRANT_TIMEOUT_S = 10.0
 # We use a numeric marker so the UI can render clickable superscripts.
 SOURCE_CITATION_MARKER = "[^{n}]"
 
+# Exact refusal string (kept in one place so prompt + server behavior stay aligned).
+NO_INFO_ANSWER = "I don't have enough information to answer that."
+
+# Regex for extracting numeric citation markers like `[^1]` from model output.
+CITATION_MARKER_REGEX = r"\[\^(\d+)\]"
+
 # System prompt that instructs the model to answer only from sources and to use
 # the above citation format.
 SYSTEM_PROMPT = """You are a company policy assistant.
