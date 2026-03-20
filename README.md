@@ -96,8 +96,7 @@ citationFilter --> response["Answer + Citations + Metrics"]
 Request path in practice:
 
 1. Ingest reads markdown/text from `data/`, chunks by size/overlap, embeds, and indexes.
-2. Ask normalizes request, checks in-memory TTL answer cache.
-3. On cache miss, retrieve context (dense or hybrid with Qdrant), then rerank.
+2. retrieve context (dense or hybrid with Qdrant), then rerank.
 4. Generate answer (stub or OpenRouter), then keep only cited chunks.
 5. Return `answer`, `citations`, `chunks`, and timing `metrics`.
 
@@ -112,10 +111,8 @@ Request path in practice:
 ## Trade-offs (Current Design)
 
 - Stub-first defaults keep local/dev deterministic and offline-friendly.
-- In-memory answer cache gives fast wins but resets on restart and is per-process.
 - Qdrant hybrid retrieval improves recall, but increases retrieval complexity.
 - Citation extraction relies on answer citation markers; if markers are missing, sources are intentionally withheld.
-- Fallback behavior prefers availability (degraded mode) over hard failure in some dependency issues.
 
 ## What To Ship Next
 
